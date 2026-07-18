@@ -1,5 +1,7 @@
+import os
 import time
 import unittest
+from unittest import mock
 
 import numpy as np
 from f1tenth_gym.envs.env_config import (
@@ -10,6 +12,7 @@ from f1tenth_gym.envs.env_config import (
 )
 from f1tenth_gym.envs.f110_env import RenderClock
 from f1tenth_gym.envs.observation import ObservationType
+from f1tenth_gym.envs.rendering import _resolve_offscreen_backend
 import gymnasium as gym
 
 
@@ -33,7 +36,10 @@ class TestRenderer(unittest.TestCase):
     def test_rgb_array_render(self):
         env =  gym.make(
             "f1tenth_gym:f1tenth-v0",
-            config=EnvConfig(observation_config=ObservationConfig(type=ObservationType.KINEMATIC_STATE)),
+            config=EnvConfig(
+                observation_config=ObservationConfig(type=ObservationType.KINEMATIC_STATE),
+                render_config=RenderConfig(frame_output_method="auto"),
+            ),
             render_mode="rgb_array",
         )
         env.reset()
@@ -53,7 +59,10 @@ class TestRenderer(unittest.TestCase):
     def test_rgb_array_list(self):
         env = gym.make(
             "f1tenth_gym:f1tenth-v0",
-            config=EnvConfig(observation_config=ObservationConfig(type=ObservationType.KINEMATIC_STATE)),
+            config=EnvConfig(
+                observation_config=ObservationConfig(type=ObservationType.KINEMATIC_STATE),
+                render_config=RenderConfig(frame_output_method="auto"),
+            ),
             render_mode="rgb_array_list",
         )
         env.reset()
@@ -154,6 +163,40 @@ class TestRenderer(unittest.TestCase):
         env = _rgb_env(render_fps=45)
         self.assertEqual(env.unwrapped.render_fps, 45)
         env.close()
+
+    def test_default_frame_output_method_is_gl(self):
+        self.assertEqual(RenderConfig().frame_output_method, "gl")
+
+
+class TestOffscreenBackendResolution(unittest.TestCase):
+    """Resolver for the rgb_array backend (no rendering / display required)."""
+
+    def test_2d_never_needs_display(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DISPLAY", None)
+            self.assertEqual(_resolve_offscreen_backend("2d"), "2d")
+
+    def test_auto_falls_back_without_display(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DISPLAY", None)
+            self.assertEqual(_resolve_offscreen_backend("auto"), "2d")
+
+    def test_auto_uses_gl_with_display(self):
+        with mock.patch.dict(os.environ, {"DISPLAY": ":0"}, clear=False):
+            self.assertEqual(_resolve_offscreen_backend("auto"), "gl")
+
+    def test_gl_uses_gl_with_display(self):
+        with mock.patch.dict(os.environ, {"DISPLAY": ":0"}, clear=False):
+            self.assertEqual(_resolve_offscreen_backend("gl"), "gl")
+
+    def test_gl_without_display_raises_with_guidance(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DISPLAY", None)
+            with self.assertRaises(RuntimeError) as ctx:
+                _resolve_offscreen_backend("gl")
+            msg = str(ctx.exception)
+            self.assertIn("xvfb", msg)
+            self.assertIn("frame_output_method='2d'", msg)
 
 
 class TestRenderClock(unittest.TestCase):
