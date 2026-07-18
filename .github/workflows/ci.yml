@@ -16,8 +16,8 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
-    # env:
-    #   QT_QPA_PLATFORM: offscreen
+    # Rendering uses OpenGL, which needs a display; tests run under xvfb-run
+    # (QT_QPA_PLATFORM=xcb). The GL widget cannot render under 'offscreen'.
 
     steps:
     - name: Update apt

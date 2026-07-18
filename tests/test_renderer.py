@@ -12,11 +12,15 @@ from f1tenth_gym.envs.env_config import (
 )
 from f1tenth_gym.envs.f110_env import RenderClock
 from f1tenth_gym.envs.observation import ObservationType
-from f1tenth_gym.envs.rendering import _resolve_offscreen_backend
+from f1tenth_gym.envs.rendering import make_renderer
 import gymnasium as gym
 
+# rgb_array/human rendering uses the GL backend, which needs an X display
+# (real or a virtual one via xvfb). Skip display-bound tests when there is none.
+_HAS_DISPLAY = bool(os.environ.get("DISPLAY"))
 
-def _rgb_env(render_fps=60, real_time_factor=1.0, frame_output_method="auto", timestep=0.01):
+
+def _rgb_env(render_fps=60, real_time_factor=1.0, timestep=0.01):
     return gym.make(
         "f1tenth_gym:f1tenth-v0",
         config=EnvConfig(
@@ -25,21 +29,18 @@ def _rgb_env(render_fps=60, real_time_factor=1.0, frame_output_method="auto", ti
             render_config=RenderConfig(
                 render_fps=render_fps,
                 real_time_factor=real_time_factor,
-                frame_output_method=frame_output_method,
             ),
         ),
         render_mode="rgb_array",
     )
 
 
+@unittest.skipUnless(_HAS_DISPLAY, "rendering needs an X display (run under xvfb)")
 class TestRenderer(unittest.TestCase):
     def test_rgb_array_render(self):
         env =  gym.make(
             "f1tenth_gym:f1tenth-v0",
-            config=EnvConfig(
-                observation_config=ObservationConfig(type=ObservationType.KINEMATIC_STATE),
-                render_config=RenderConfig(frame_output_method="auto"),
-            ),
+            config=EnvConfig(observation_config=ObservationConfig(type=ObservationType.KINEMATIC_STATE)),
             render_mode="rgb_array",
         )
         env.reset()
@@ -59,10 +60,7 @@ class TestRenderer(unittest.TestCase):
     def test_rgb_array_list(self):
         env = gym.make(
             "f1tenth_gym:f1tenth-v0",
-            config=EnvConfig(
-                observation_config=ObservationConfig(type=ObservationType.KINEMATIC_STATE),
-                render_config=RenderConfig(frame_output_method="auto"),
-            ),
+            config=EnvConfig(observation_config=ObservationConfig(type=ObservationType.KINEMATIC_STATE)),
             render_mode="rgb_array_list",
         )
         env.reset()
@@ -164,39 +162,23 @@ class TestRenderer(unittest.TestCase):
         self.assertEqual(env.unwrapped.render_fps, 45)
         env.close()
 
-    def test_default_frame_output_method_is_gl(self):
-        self.assertEqual(RenderConfig().frame_output_method, "gl")
 
+class TestNoDisplayGuidance(unittest.TestCase):
+    """make_renderer must fail loudly with setup guidance when no display exists."""
 
-class TestOffscreenBackendResolution(unittest.TestCase):
-    """Resolver for the rgb_array backend (no rendering / display required)."""
-
-    def test_2d_never_needs_display(self):
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("DISPLAY", None)
-            self.assertEqual(_resolve_offscreen_backend("2d"), "2d")
-
-    def test_auto_falls_back_without_display(self):
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("DISPLAY", None)
-            self.assertEqual(_resolve_offscreen_backend("auto"), "2d")
-
-    def test_auto_uses_gl_with_display(self):
-        with mock.patch.dict(os.environ, {"DISPLAY": ":0"}, clear=False):
-            self.assertEqual(_resolve_offscreen_backend("auto"), "gl")
-
-    def test_gl_uses_gl_with_display(self):
-        with mock.patch.dict(os.environ, {"DISPLAY": ":0"}, clear=False):
-            self.assertEqual(_resolve_offscreen_backend("gl"), "gl")
-
-    def test_gl_without_display_raises_with_guidance(self):
+    def test_rgb_array_without_display_raises_with_guidance(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("DISPLAY", None)
             with self.assertRaises(RuntimeError) as ctx:
-                _resolve_offscreen_backend("gl")
-            msg = str(ctx.exception)
-            self.assertIn("xvfb", msg)
-            self.assertIn("frame_output_method='2d'", msg)
+                # params/track are unused before the display check raises
+                make_renderer(None, None, ["agent_0"], render_mode="rgb_array")
+            self.assertIn("xvfb", str(ctx.exception))
+
+    def test_render_mode_none_needs_no_display(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DISPLAY", None)
+            renderer, _ = make_renderer(None, None, ["agent_0"], render_mode=None)
+            self.assertIsNone(renderer)
 
 
 class TestRenderClock(unittest.TestCase):

@@ -23,7 +23,7 @@ from .action import (
 )
 from .observation import ObservationType, observation_factory
 from .reset import make_reset_fn
-from .rendering import make_renderer, RenderSpec
+from .rendering import make_renderer
 from .track import Track
 
 
@@ -317,14 +317,12 @@ class F110Env(gym.Env):
         self._last_frame = None
 
         if self.render_enabled:
-            render_spec = RenderSpec(frame_output_method=self.render_cfg.frame_output_method)
             self.renderer, self.render_spec = make_renderer(
                 params=self.vehicle_params,
                 track=self.track,
                 agent_ids=self.agent_ids,
                 render_mode=self.render_mode,
                 render_fps=self.render_cfg.render_fps,
-                render_spec=render_spec,
             )
         else:
             self.renderer = None

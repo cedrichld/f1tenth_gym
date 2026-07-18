@@ -108,7 +108,7 @@ env.step(action)                                          f110_env.py:283-318
 | [`envs/collision_models.py`](f1tenth_gym/envs/collision_models.py) | `CollisionCheckMode`, numba GJK, `get_vertices` | :35 |
 | [`envs/track/`](f1tenth_gym/envs/track/track.py) | Map loading/download, splines, Frenet frame | `Track` :41 |
 | [`envs/reset/`](f1tenth_gym/envs/reset/__init__.py) | Start-pose strategies (a real registry) | `make_reset_fn` :89 |
-| [`envs/rendering/`](f1tenth_gym/envs/rendering/__init__.py) | Two PyQt6 backends + render callbacks | `make_renderer` :19 |
+| [`envs/rendering/`](f1tenth_gym/envs/rendering/__init__.py) | One PyQt6 GL backend (`PyQtEnvRendererGL`) + render callbacks | `make_renderer` :19 |
 
 ---
 
@@ -173,7 +173,7 @@ Units: metres, radians, m/s, m/s², rad/m (curvature). Yaw wrapped to `[-π, π)
 
 **Reset strategies** ([reset/__init__.py:32](f1tenth_gym/envs/reset/__init__.py#L32)): `RL_GRID_STATIC`(default) / `RL_RANDOM_STATIC` / `RL_GRID_RANDOM` / `RL_RANDOM_RANDOM` / `MAP_RANDOM_STATIC`. All RL_* bind to `track.raceline` ([:57](f1tenth_gym/envs/reset/__init__.py#L57)), **never** the centerline, and all pass `move_laterally=False` — so multi-agent "grid" resets put every car **on** the raceline, separated only longitudinally.
 
-**Config** — 14 top-level `EnvConfig` fields ([env_config.py:134](f1tenth_gym/envs/env_config.py#L134)). Defaults: `seed=12345, map_name="Spielberg", map_scale=1.0, params=F1TENTH, num_agents=1, ego_index=0, collision_check=LIDAR_SCAN, render_enabled=True`, plus `ControlConfig(SPEED, STEERING_ANGLE, steer_delay_steps=0)`, `SimulationConfig(timestep=0.01, integrator_timestep=0.01, RK4, ST, FRENET_BASED, compute_frenet_frame=True, max_laps=1)`, `ObservationConfig(DIRECT, None)`, `ResetConfig(RL_GRID_STATIC)`, `LiDARConfig(1080 beams, fov=4.712389, range 0–30, noise_std=0.01, tf=(0.275,0,0))`, `RenderConfig(render_fps=60, real_time_factor=1.0, frame_output_method="gl")`.
+**Config** — 14 top-level `EnvConfig` fields ([env_config.py:134](f1tenth_gym/envs/env_config.py#L134)). Defaults: `seed=12345, map_name="Spielberg", map_scale=1.0, params=F1TENTH, num_agents=1, ego_index=0, collision_check=LIDAR_SCAN, render_enabled=True`, plus `ControlConfig(SPEED, STEERING_ANGLE, steer_delay_steps=0)`, `SimulationConfig(timestep=0.01, integrator_timestep=0.01, RK4, ST, FRENET_BASED, compute_frenet_frame=True, max_laps=1)`, `ObservationConfig(DIRECT, None)`, `ResetConfig(RL_GRID_STATIC)`, `LiDARConfig(1080 beams, fov=4.712389, range 0–30, noise_std=0.01, tf=(0.275,0,0))`, `RenderConfig(render_fps=60, real_time_factor=1.0)`.
 
 Nested mutation must nest: `cfg.with_updates(params=cfg.params.with_updates(mu=1.0))`, then `env.unwrapped.configure(cfg2)`.
 
@@ -223,20 +223,13 @@ Four constructors: `from_track_name` (tries `{stem}.yaml` then legacy `{stem}_ma
 
 ## Rendering
 
-Fully decoupled: `F110Env` hands the renderer an immutable `render_obs` deepcopy once per step; the renderer never touches the sim. Two backends behind `EnvRenderer` ([renderer.py:40](f1tenth_gym/envs/rendering/renderer.py#L40), 7 abstract methods): `PyQtEnvRenderer` (2D pyqtgraph) and `PyQtEnvRendererGL` (GL, the default `render_type="pyqt6gl"`).
+Fully decoupled: `F110Env` hands the renderer an immutable `render_obs` deepcopy once per step; the renderer never touches the sim. **One backend**: `PyQtEnvRendererGL` (GL/pyqtgraph.opengl) behind the `EnvRenderer` ABC ([renderer.py:40](f1tenth_gym/envs/rendering/renderer.py#L40), 7 abstract methods). The old 2D `PyQtEnvRenderer`/`pyqt_objects.py` raster fallback was **removed** — GL is the only path. Callbacks read `env_renderer.obs`; see [`make_lidar_scan_callback`](f1tenth_gym/envs/rendering/callbacks.py#L54) and `PurePursuitPlanner.get_render_callbacks()`.
 
-`render_mode` ∈ `{"human", "human_fast", "rgb_array", "unlimited"}` ([f110_env.py:44](f1tenth_gym/envs/f110_env.py#L44)). Extension hook: `env.unwrapped.add_render_callback(fn)` where `fn(env_renderer) -> None`; see [`make_lidar_scan_callback`](f1tenth_gym/envs/rendering/callbacks.py#L54) and `PurePursuitPlanner.get_render_callbacks()`. Callbacks read `env_renderer.obs` (now set by **both** backends).
+`render_mode` ∈ `{"human", "human_fast", "rgb_array", "unlimited"}` ([f110_env.py:44](f1tenth_gym/envs/f110_env.py#L44)). Extension hook: `env.unwrapped.add_render_callback(fn)` where `fn(env_renderer) -> None`.
 
-**Rendering is decoupled from stepping by `RenderClock`** ([f110_env.py](f1tenth_gym/envs/f110_env.py) — class above `F110Env`), driven from `F110Env.render()`. Two independent clocks: a wall-clock **display cap** (human modes redraw at most `render_fps`/wall-second, so stepping faster than real time never forces more frames) and a sim-time **frame accumulator** (rgb_array grabs a distinct frame every `1/render_fps` sim-seconds; the cached frame is returned in between so `RecordVideo` yields smooth video). Human-mode **pacing** holds `sim/wall == real_time_factor` via an absolute anchor (`inf` = free-run). All configured via `EnvConfig.render_config` ([`RenderConfig`](f1tenth_gym/envs/env_config.py): `render_fps=60`, `real_time_factor=1.0`, `frame_output_method="gl"` (default; needs a display/xvfb)). Runtime toggle: `env.unwrapped.set_real_time_factor(x)`; read-only `env.unwrapped.{real_time_factor, render_fps, frame_is_new}`. `human_fast`→rtf 10, `unlimited`→rtf ∞ (legacy sugar). `metadata["render_fps"]` stays `round(1/timestep)` (RecordVideo container fps for real-time playback) — deliberately *not* `render_config.render_fps`.
+**All rendering needs an X display** (real or virtual via `xvfb`) — GL cannot render under the headless `offscreen` Qt platform (no FBO). If a display render mode is requested with no `$DISPLAY`, `make_renderer` raises `RuntimeError(NO_DISPLAY_GUIDANCE)` ([rendering/__init__.py](f1tenth_gym/envs/rendering/__init__.py#L1)) with xvfb/Colab setup steps, instead of failing cryptically in Qt. rgb_array grabs run under `QT_QPA_PLATFORM=xcb` (~1.4 ms GPU / ~2 ms xvfb) and return **contiguous RGB (H, W, 3) uint8** pinned to a square `window_size`. CI runs `xvfb-run pytest` ([ci.yml](.github/workflows/ci.yml)); renderer tests skip when there's no `$DISPLAY`. Colab: `apt-get install -y xvfb` + `pyvirtualdisplay` (or `xvfb-run`), then `rgb_array` + embed the MP4 inline (`IPython.display.Video`) — no live GUI window in Colab.
 
-**Offscreen (rgb_array) backend** ([rendering/__init__.py](f1tenth_gym/envs/rendering/__init__.py#L1), `_resolve_offscreen_backend`), by `RenderConfig.frame_output_method`:
-- `"gl"` (**default**) — fast GL framebuffer grab under `QT_QPA_PLATFORM=xcb` (~1.4 ms GPU / ~2 ms xvfb). **Requires a display** (real X or `xvfb`). No `$DISPLAY` → `make_renderer` raises a `RuntimeError` (`NO_DISPLAY_GUIDANCE`) with xvfb/Colab setup steps, instead of silently degrading. Colab: `apt-get install -y xvfb` + `pyvirtualdisplay`, or run under `xvfb-run`; then record and embed the MP4 inline (`IPython.display.Video`). No live GUI window in Colab.
-- `"auto"` — GL if `$DISPLAY` else 2D raster (silent headless fallback, zero setup).
-- `"2d"` — 2D raster exporter under `offscreen` (~3 ms, no display needed).
-
-The GL widget **cannot** render under the bare `offscreen` platform (no FBO) — that was the old silent-downgrade root cause. Both backends return **contiguous RGB (H, W, 3) uint8** pinned to a square `window_size`. CI runs `xvfb-run pytest` so the default GL path is exercised ([ci.yml](.github/workflows/ci.yml)). `RenderConfig.frame_output_method` reaches `make_renderer` via a `RenderSpec`; the rest of `RenderSpec` (palette, window size, car model) is still only settable by editing its defaults.
-
-Caveat: `QT_QPA_PLATFORM` is process-global (locked at first `QApplication`), so one process cannot mix GL (`xcb`) and 2D (`offscreen`) renderers — the first renderer's platform wins.
+**Rendering is decoupled from stepping by `RenderClock`** ([f110_env.py](f1tenth_gym/envs/f110_env.py) — class above `F110Env`), driven from `F110Env.render()`. Two independent clocks: a wall-clock **display cap** (human modes redraw at most `render_fps`/wall-second, so stepping faster than real time never forces more frames) and a sim-time **frame accumulator** (rgb_array grabs a distinct frame every `1/render_fps` sim-seconds; the cached frame is returned in between so `RecordVideo` yields smooth video). Human-mode **pacing** holds `sim/wall == real_time_factor` via an absolute anchor (`inf` = free-run). Config: `EnvConfig.render_config` ([`RenderConfig`](f1tenth_gym/envs/env_config.py): `render_fps=60`, `real_time_factor=1.0` — no backend knob, GL is the only backend). Runtime toggle: `env.unwrapped.set_real_time_factor(x)`; read-only `env.unwrapped.{real_time_factor, render_fps, frame_is_new}`. `human_fast`→rtf 10, `unlimited`→rtf ∞ (legacy sugar). `metadata["render_fps"]` stays `round(1/timestep)` (RecordVideo container fps for real-time playback) — deliberately *not* `render_config.render_fps`. `RenderSpec` (palette, window size, `car_model`) is still only settable by editing its defaults.
 
 ---
 
@@ -300,7 +293,7 @@ Lint is a **separate** workflow ([lint.yml:44](.github/workflows/lint.yml#L44)):
 | Same footgun, worse: `examples/video_recording.py` wraps in `gymnasium.wrappers.RecordVideo`, which hard-requires **moviepy** (`gym.error.DependencyNotInstalled` without it) — declared nowhere, **and `uv sync` actively uninstalls it**. Re-run `uv pip install moviepy` after any sync | [examples/video_recording.py:29](examples/video_recording.py#L29) |
 | `PurePursuitPlanner`'s `max_reacquire` branch **crashes** (`numba TypingError: dot(float32, float64)` + a length-2 array indexed at `[2]`). Reachable whenever the car drifts >tlad off the raceline but <20 m | [examples/waypoint_follow.py:276-278](examples/waypoint_follow.py#L276) |
 
-**Dead code / dead fields** (don't be fooled): `SimulationState.lap_counts/.lap_times/.lap_time_last_finish` are allocated, zeroed, and **never read or written** — the env keeps its own parallel float64 arrays. `F110Simulator._ray_to_rect_distance` (scalar, 60 lines) has no callers. `laser_models.py:575-690` is a broken in-module unittest block. `RenderSpec.frame_output_method` is never read.
+**Dead code / dead fields** (don't be fooled): `SimulationState.lap_counts/.lap_times/.lap_time_last_finish` are allocated, zeroed, and **never read or written** — the env keeps its own parallel float64 arrays. `F110Simulator._ray_to_rect_distance` (scalar, 60 lines) has no callers. `laser_models.py:575-690` is a broken in-module unittest block.
 
 ---
 
@@ -320,9 +313,9 @@ Everything is `IntEnum` + hardcoded `if/elif` dispatch. **There is no registry**
 | **New reset strategy** | `ResetStrategy` + a `ResetFn`/`MaskedResetFn`/`MapResetFn` subclass + `_RESET_BUILDERS` [reset/__init__.py:112-137](f1tenth_gym/envs/reset/__init__.py#L112). Imports live at the **bottom** of that module to break a circular import — follow the pattern |
 | **New collision mode** | `CollisionCheckMode` [:35](f1tenth_gym/envs/collision_models.py#L35) + [simulator.py:559-580](f1tenth_gym/envs/simulator.py#L559). The `else` is a **catch-all** — a new member silently falls into the GJK path. Use `elif` + `raise` |
 | **New config knob** | field + default on the frozen dataclass + rule in its `__post_init__` + read it in `_apply_env_config` [f110_env.py:82-112](f1tenth_gym/envs/f110_env.py#L82). New nested section also needs the isinstance check in `EnvConfig.__post_init__` `:187-217` |
-| **New render backend** | 7 `EnvRenderer` abstractmethods + `update_params` (called unconditionally) + `close()` must free the GL/window resources + an `elif` in `make_renderer` |
-| **New render_mode string** | `F110Env.metadata["render_modes"]` `:44`, the render_mode→rtf map in `_initialize_components`, `render()`'s mode branch, and `make_renderer`'s two mode lists |
-| **Render pacing / fps / RTF** | `RenderClock` (above `F110Env`) owns it; `render()` calls `display_due`/`frame_is_new`/`pace`. Config in `RenderConfig`; don't reintroduce a sleep in the backends |
+| **New render backend** | There is only `PyQtEnvRendererGL` now (`make_renderer` builds it directly, no dispatch). A second backend means re-adding selection to `make_renderer` + implementing 7 `EnvRenderer` abstractmethods + `update_params` + a `close()` that frees resources |
+| **New render_mode string** | `F110Env.metadata["render_modes"]` `:44`, the render_mode→rtf map in `_initialize_components`, `render()`'s mode branch, and `make_renderer`'s `_DISPLAY_RENDER_MODES` + construction list |
+| **Render pacing / fps / RTF** | `RenderClock` (above `F110Env`) owns it; `render()` calls `display_due`/`frame_is_new`/`pace`. Config in `RenderConfig`; don't reintroduce a sleep in the backend |
 
 ---
 

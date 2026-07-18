@@ -347,8 +347,7 @@ class PyQtEnvRendererGL(EnvRenderer):
         if ptr is None:
             raise RuntimeError(
                 "grabFramebuffer returned an empty image (no GL framebuffer). "
-                "Offscreen GL needs a display: run under a real X server or `xvfb-run`, "
-                "or set render_config.frame_output_method='2d'."
+                "Offscreen GL needs a display: run under a real X server or `xvfb-run`."
             )
         # Tell Python how many bytes to read (width*height*3 for RGB888)
         ptr.setsize(height * width * 3)  # 3 bytes per pixel for RGB888

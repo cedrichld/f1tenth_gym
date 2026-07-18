@@ -17,41 +17,20 @@ __all__ = [
 ]
 
 NO_DISPLAY_GUIDANCE = (
-    "rgb_array rendering with the GL backend needs an X display (real or virtual), "
-    "but no $DISPLAY was found.\n"
-    "  • Headless server / Google Colab: install xvfb and start a virtual display, e.g.\n"
-    "        apt-get install -y xvfb            # in Colab, prefix with '!'\n"
-    "        pip install pyvirtualdisplay       # in Colab, prefix with '!'\n"
+    "F1TENTH rendering needs an X display (real or virtual), but no $DISPLAY was found.\n"
+    "  • Headless server: run your script under a virtual display:\n"
+    "        xvfb-run -a python your_script.py\n"
+    "  • Google Colab (in a cell, before creating the env):\n"
+    "        !apt-get -qq install -y xvfb\n"
+    "        !pip -q install pyvirtualdisplay\n"
     "        from pyvirtualdisplay import Display\n"
     "        Display(visible=0, size=(800, 800)).start()\n"
-    "    or run your whole script under:  xvfb-run -a python your_script.py\n"
-    "  • To use the slower pure-CPU renderer instead (no display needed), set\n"
-    "        EnvConfig(render_config=RenderConfig(frame_output_method='2d'))\n"
-    "  • To fall back to CPU automatically when no display is present, use\n"
-    "        frame_output_method='auto'"
+    "    then use render_mode='rgb_array' and embed the frames/video inline."
 )
 
-
-def _resolve_offscreen_backend(method: str) -> str:
-    """Resolve the rgb_array backend to ``"gl"`` or ``"2d"``.
-
-    The GL widget cannot render under the headless ``offscreen`` Qt platform
-    (it has no FBO there), so a GL grab needs a real X server or a virtual one
-    (``xvfb``), signalled by ``$DISPLAY``.
-
-    * ``"gl"``   -> GL; **raises** ``RuntimeError`` with setup guidance if no display.
-    * ``"2d"``   -> the 2D raster exporter (no display needed).
-    * ``"auto"`` -> GL if ``$DISPLAY`` is set, else 2D (silent headless fallback).
-    """
-    has_display = bool(os.environ.get("DISPLAY"))
-    if method == "2d":
-        return "2d"
-    if method == "auto":
-        return "gl" if has_display else "2d"
-    # method == "gl" (default): require a display, guide the user if missing.
-    if not has_display:
-        raise RuntimeError(NO_DISPLAY_GUIDANCE)
-    return "gl"
+# Render modes that draw pixels and therefore require a display. (gymnasium
+# strips the "_list" suffix, so the env only ever sees "rgb_array" here.)
+_DISPLAY_RENDER_MODES = ("human", "human_fast", "unlimited", "rgb_array")
 
 
 def make_renderer(
@@ -62,28 +41,22 @@ def make_renderer(
     render_fps: Optional[int] = 60,
     render_spec: RenderSpec = RenderSpec(),
 ) -> tuple[EnvRenderer, RenderSpec]:
-    """Return an instance of the renderer and the rendering specification."""
-    is_rgb = render_mode in ("rgb_array", "rgb_array_list")
-    method = getattr(render_spec, "frame_output_method", "auto")
+    """Return a GL renderer and the render spec.
 
-    if render_spec.render_type == "pyqt6":
-        if is_rgb:
-            os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-        from .rendering_pyqt import PyQtEnvRenderer as EnvRenderer
-    elif render_spec.render_type == "pyqt6gl":
-        if is_rgb:
-            if _resolve_offscreen_backend(method) == "gl":
-                # fast GL framebuffer grab; needs a display (real X or xvfb)
-                os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
-                from .rendering_pyqtgl import PyQtEnvRendererGL as EnvRenderer
-            else:
-                # 2D raster exporter (no display needed)
-                os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-                from .rendering_pyqt import PyQtEnvRenderer as EnvRenderer
-        else:
-            from .rendering_pyqtgl import PyQtEnvRendererGL as EnvRenderer
-    else:
-        raise ValueError(f"Unknown render type: {render_spec.render_type}")
+    All rendering uses the OpenGL backend (``PyQtEnvRendererGL``), which needs
+    an X display -- real or virtual (``xvfb``). If a display render mode is
+    requested with no ``$DISPLAY``, raise a clear error with setup guidance
+    rather than failing cryptically deep in Qt.
+    """
+    needs_display = render_mode in _DISPLAY_RENDER_MODES
+    if needs_display and not os.environ.get("DISPLAY"):
+        raise RuntimeError(NO_DISPLAY_GUIDANCE)
+
+    if render_mode == "rgb_array":
+        # off-screen grab from the GL framebuffer under a real/virtual X server
+        os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+
+    from .rendering_pyqtgl import PyQtEnvRendererGL as EnvRenderer
 
     if render_mode in ["human", "rgb_array", "unlimited", "human_fast"]:
         renderer = EnvRenderer(

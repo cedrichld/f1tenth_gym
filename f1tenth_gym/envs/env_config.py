@@ -151,22 +151,13 @@ class RenderConfig:
             modes. ``1.0`` = real time, ``5.0`` = 5x faster, ``float("inf")``
             = no pacing (free-run). Ignored in rgb_array mode (never paces).
             Togglable at runtime via ``F110Env.set_real_time_factor``.
-        frame_output_method: How rgb_array frames are produced.
-            ``"gl"`` (default): fast GL framebuffer grab; requires a display
-            (real X server or a virtual one via ``xvfb``). On a headless box
-            with no display, env creation raises a clear error telling you how
-            to start a virtual display (see the message / README). In Google
-            Colab: ``!apt-get install -y xvfb`` then start a virtual display
-            with ``pyvirtualdisplay``, or run under ``xvfb-run``.
-            ``"auto"``: GL grab when a display is available, else silently fall
-            back to the 2D raster exporter (works headless with zero setup).
-            ``"2d"``: always use the 2D raster exporter (no display needed;
-            slower, pure CPU).
+
+    Rendering uses the OpenGL backend and therefore needs an X display (real or
+    a virtual one via ``xvfb``); see ``make_renderer`` for headless/Colab setup.
     """
 
     render_fps: int = 60
     real_time_factor: float = 1.0
-    frame_output_method: str = "gl"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "render_fps", int(self.render_fps))
@@ -176,10 +167,6 @@ class RenderConfig:
         if not (self.real_time_factor > 0):
             raise ValueError(
                 f"real_time_factor must be > 0 (or float('inf')), got {self.real_time_factor}"
-            )
-        if self.frame_output_method not in ("auto", "gl", "2d"):
-            raise ValueError(
-                f"frame_output_method must be one of 'auto', 'gl', '2d', got {self.frame_output_method!r}"
             )
 
     def with_updates(self, **changes: Any) -> "RenderConfig":
