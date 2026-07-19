@@ -7,14 +7,18 @@ from PyQt6 import QtWidgets, QtCore, QtGui
 from typing import Optional, Union
 from PIL import ImageColor
 from PyQt6.QtGui import QImage
-import OpenGL.GL as gl_module
 
 from ..track import Track
 from ..dynamic_models import VehicleParameters
 from .renderer import EnvRenderer, RenderSpec, ObjectRenderer
 from .pyqtgl_objects import PointsRenderer, LinesRenderer, ClosedLinesRenderer, CarRenderer
-from .mesh_renderer import MeshRenderer
 import cv2
+
+# Top-down camera azimuth (degrees) that renders the world north-up:
+# world +x -> screen right, world +y -> screen up. With azimuth 0 the view is
+# rotated 90° CW (east points down), which is disorienting and mismatches a
+# plt.plot(xs, ys) of the raceline.
+_TOP_DOWN_AZIMUTH = -90
 
 class PyQtEnvRendererGL(EnvRenderer):
     def __init__(
@@ -54,20 +58,17 @@ class PyQtEnvRendererGL(EnvRenderer):
         self.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
         self.view = gl.GLViewWidget() 
 
-        self.view.setCameraPosition(pos=QtGui.QVector3D(0, 0, 0), distance=self.default_camera_dist, elevation=90, azimuth=0)
+        self.view.setCameraPosition(pos=QtGui.QVector3D(0, 0, 0), distance=self.default_camera_dist, elevation=90, azimuth=_TOP_DOWN_AZIMUTH)
         self.view.setBackgroundColor("w")
-        self.view.resize(self.render_spec.window_size, self.render_spec.window_size) 
-        self.prealloc_frame = np.zeros(
-            (self.render_spec.window_size, self.render_spec.window_size, 3), dtype=np.uint8
-        )
+        self.view.resize(self.render_spec.window_size, self.render_spec.window_size)
 
         self.window = QtWidgets.QMainWindow()
         self.window.setWindowTitle("F1Tenth Gym - OpenGL")
         self.window.setGeometry(0, 0, self.render_spec.window_size, self.render_spec.window_size)
         
-        if self.render_spec.car_model == "2d":
-            if not self.camera_free_rotation: self._enable_pan_only()
-            self.focused = True
+        if not self.camera_free_rotation:
+            self._enable_pan_only()
+        self.focused = True
         self._init_map(track)
         
         # FPS label
@@ -128,20 +129,6 @@ class PyQtEnvRendererGL(EnvRenderer):
         if self.agent_to_follow is None:
             self._center_camera_on_map()
 
-    def _apply_view_flip(self):
-        """Apply a vertical flip transformation to the OpenGL view."""
-        # Override the paintGL method to apply a Y-axis flip transformation
-        # This will flip the view vertically so it matches the output frame orientation
-        original_paintGL = self.view.paintGL
-        def flipped_paintGL():
-            gl_module.glPushMatrix()
-            # Apply the flip transformation (flip Y-axis)
-            gl_module.glScalef(-1.0, 1.0, 1.0)
-            # Call the original paintGL
-            original_paintGL()
-            gl_module.glPopMatrix()
-        self.view.paintGL = flipped_paintGL
-        
     def _init_map(self, track):
         map_image = track.occupancy_map
         map_image = np.rot90(map_image, k=1)
@@ -184,7 +171,7 @@ class PyQtEnvRendererGL(EnvRenderer):
             pos=QtGui.QVector3D(x, y, 1),             # camera position
             distance=extent * 0.8,  # zoom level
             elevation=90,                              # top-down
-            azimuth=0                                  # no rotation
+            azimuth=_TOP_DOWN_AZIMUTH                   # north-up (see constant)
         )
     
     def _center_camera_on_car(self, car_idx=0, distance_reset=False):
@@ -197,7 +184,7 @@ class PyQtEnvRendererGL(EnvRenderer):
         self.view.setCameraPosition(
             pos=QtGui.QVector3D(x, y, 1),             # camera position
             elevation=90,                              # top-down
-            azimuth=0                                  # no rotation
+            azimuth=_TOP_DOWN_AZIMUTH                   # north-up (see constant)
         )
         
     def _enable_pan_only(self):
@@ -259,28 +246,16 @@ class PyQtEnvRendererGL(EnvRenderer):
             obs: simulation obs as dictionary
         """
         if self.cars is None:
-            if self.render_spec.car_model == "3d":
-                self.cars = [MeshRenderer(
-                    env_renderer=self,
-                    car_length=float(self.params.length),
-                    car_width=float(self.params.width),
-                    color=self.car_colors[ic],
-                    render_spec=self.render_spec,
-                    map_origin=self.map_origin[:2],
-                    resolution=self.map_resolution,
-                ) for ic in range(len(self.agent_ids))
-                ]
-            elif self.render_spec.car_model == "2d":
-                self.cars = [CarRenderer(
-                    env_renderer=self,
-                    car_length=float(self.params.length),
-                    car_width=float(self.params.width),
-                    color=self.car_colors[ic],
-                    render_spec=self.render_spec,
-                    map_origin=self.map_origin[:2],
-                    resolution=self.map_resolution,
-                ) for ic in range(len(self.agent_ids))
-                ]
+            self.cars = [CarRenderer(
+                env_renderer=self,
+                car_length=float(self.params.length),
+                car_width=float(self.params.width),
+                color=self.car_colors[ic],
+                render_spec=self.render_spec,
+                map_origin=self.map_origin[:2],
+                resolution=self.map_resolution,
+            ) for ic in range(len(self.agent_ids))
+            ]
 
         # update cars obs and zoom level (updating points-per-unit)
         for i, id in enumerate(self.agent_ids):
@@ -305,7 +280,6 @@ class PyQtEnvRendererGL(EnvRenderer):
             for callback_fn in self.callbacks:
                 callback_fn(self)
             if self.agent_to_follow is not None and \
-                self.render_spec.car_model == "2d" and \
                 not self.camera_free_rotation and \
                 self.focused:
                     self._center_camera_on_car(self.agent_to_follow, distance_reset=True)
@@ -359,39 +333,6 @@ class PyQtEnvRendererGL(EnvRenderer):
         # Overlay text information using OpenCV
         if self.render_spec.frame_output_info_label:
             self._overlay_text_on_frame(img_array)
-
-        return img_array
-
-    def grab_frame_with_exporter(self) -> np.ndarray:
-        """
-        Grab the current frame by capturing the entire widget including Qt labels.
-        Since ImageExporter doesn't work with GLViewWidget, we'll capture the widget directly.
-        """
-        # Make sure the widget is updated and everything is rendered
-        
-        self.app.processEvents()
-        
-        # Capture the entire view widget (this should include Qt labels if they're children)
-        pixmap = self.view.grab()
-        qimg = pixmap.toImage()
-        
-        # Convert to RGB format
-        if qimg.format() != QImage.Format.Format_RGB888:
-            qimg = qimg.convertToFormat(QImage.Format.Format_RGB888)
-        
-        width = qimg.width()
-        height = qimg.height()
-        
-        ptr = qimg.bits()
-        ptr.setsize(height * width * 3)  # 3 bytes per pixel for RGB
-        img_array = np.array(ptr).reshape(height, width, 3)
-        
-        # No need to flip since this captures the widget as displayed
-        # (not the OpenGL framebuffer directly)
-        
-        # Ensure the array is contiguous in memory for video encoding
-        # img_array = np.ascontiguousarray(img_array)
-        
 
         return img_array
 

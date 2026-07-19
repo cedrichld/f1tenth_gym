@@ -30,6 +30,7 @@ class CarRenderer(ObjectRenderer):
         self.opacity = 1.0
         self.rgba = [c / 255 for c in color] + [self.opacity]
         self.rgba = np.array([self.rgba] * 2)
+        self._applied_rgba = self.rgba  # rgba currently pushed to the mesh
         self.scale = 1.0
         self.z_offset = 0.3  # Offset for rendering above the ground
         
@@ -112,28 +113,28 @@ class CarRenderer(ObjectRenderer):
             state[1],
             state[4],
         )
-        if obs[id]["collision"] > 0:
-            color = (255, 0, 0)
-            self.rgba = [c / 255 for c in color] + [self.opacity]
-            self.rgba = np.array([self.rgba] * 2)
+        # Red while colliding, otherwise the agent's base colour. Recomputed
+        # every update so the car returns to its colour once clear -- and an
+        # opponent that crashed (which does not end the episode) does not stay
+        # red forever. render() re-pushes it to the mesh only when it changes.
+        color = (255, 0, 0) if obs[id]["collision"] > 0 else self.color
+        self.rgba = np.array([[c / 255 for c in color] + [self.opacity]] * 2)
         self.steering = state[2]
         
     def render(self, scale=1.0):
-        if self.scale != scale:
-            # transformed = self.apply_pose(self.pose, 1.0)
-            self.mesh.resetTransform()
-            self.mesh.setMeshData(vertexes=self.base_rect * scale, 
+        # Re-push mesh data only when the scale or the colour actually changed
+        # (colour changes on collision) -- otherwise just re-apply the transform.
+        if self.scale != scale or not np.array_equal(self.rgba, self._applied_rgba):
+            self.mesh.setMeshData(vertexes=self.base_rect * scale,
                                 faces=self.faces,
                                 faceColors=self.rgba,
                                 smooth=False,
                                 drawEdges=False,)
-            self.mesh.rotate(self.pose[2] / np.pi * 180, 0, 0, 1)
-            self.mesh.translate(self.pose[0], self.pose[1], self.z_offset)
             self.scale = scale
-        else:
-            self.mesh.resetTransform()
-            self.mesh.rotate(self.pose[2] / np.pi * 180, 0, 0, 1)
-            self.mesh.translate(self.pose[0], self.pose[1], self.z_offset)
+            self._applied_rgba = self.rgba
+        self.mesh.resetTransform()
+        self.mesh.rotate(self.pose[2] / np.pi * 180, 0, 0, 1)
+        self.mesh.translate(self.pose[0], self.pose[1], self.z_offset)
             
             
 class LinesRenderer(ObjectRenderer):

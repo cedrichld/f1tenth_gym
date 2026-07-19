@@ -31,7 +31,6 @@ class RenderSpec:
         "#a6cee3",
         "#b2df8a",
     )
-    car_model: str = "2d"  # "2d" flat car vs "3d" mesh (NOT a backend selector)
     frame_output_info_label: bool = True
 
 
