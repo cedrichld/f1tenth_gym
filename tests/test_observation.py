@@ -150,3 +150,26 @@ class TestObservationInterface(unittest.TestCase):
             self.assertTrue(space.contains(observation))
         env.close()
 
+
+
+class TestScanObservationCopy(unittest.TestCase):
+    def test_scan_is_a_copy_not_a_live_view(self):
+        """obs['scan'] must be a copy: the sim scan buffer is overwritten in
+        place every step, so a view would silently corrupt a stored scan
+        (e.g. an RL replay buffer)."""
+        env = gym.make(
+            "f1tenth_gym:f1tenth-v0",
+            config=EnvConfig(observation_config=ObservationConfig(type=ObservationType.DIRECT)),
+        )
+        obs, _ = env.reset(seed=1)
+        env.step(np.array([[0.1, 4.0]], dtype=np.float32))
+        obs, *_ = env.step(np.array([[0.1, 4.0]], dtype=np.float32))
+        scan = obs["agent_0"]["scan"]
+        self.assertFalse(
+            np.shares_memory(scan, env.unwrapped.sim.state.scans),
+            "obs scan aliases the live sim buffer",
+        )
+        snapshot = scan.copy()
+        env.step(np.array([[0.2, 4.0]], dtype=np.float32))  # overwrites the buffer
+        np.testing.assert_array_equal(scan, snapshot, "stored scan mutated after a later step")
+        env.close()

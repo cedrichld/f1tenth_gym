@@ -503,6 +503,21 @@ class F110Simulator:
 
         return np.where(min_t == np.inf, 0.0, min_t)
 
+    def _halt_on_collision(self, agent_idx: int) -> None:
+        """Stop a car that has collided and flag it.
+
+        Zero the linear and angular velocities but KEEP the pose. Both the
+        ``state`` and ``standard_state`` layouts are ``[x/X, y/Y, delta/steer,
+        v/speed, yaw, yaw_rate, beta]`` (KS omits the last two), so index 3 is
+        the velocity and index 4 is the yaw. The old code did ``state[3:] = 0``,
+        which also wiped the yaw (index 4) — snapping the heading to 0 (east) —
+        and left standard_state stale so the two disagreed after a collision.
+        """
+        for buf in (self.state.state, self.state.standard_state):
+            buf[agent_idx, 3] = 0.0    # velocity
+            buf[agent_idx, 5:] = 0.0   # yaw_rate, slip angle (no-op for KS); yaw at [4] preserved
+        self.state.collisions[agent_idx] = 1.0
+
     def _update_scans(self) -> None:
         # Precompute collision vertices for every agent once (reused by inner loop and _update_agent_collisions)
         all_vertices = []
@@ -532,8 +547,7 @@ class F110Simulator:
                 cache.side_distances,
                 self.ttc_threshold,
             ):
-                self.state.state[agent_idx, 3:] = 0.0
-                self.state.collisions[agent_idx] = 1.0
+                self._halt_on_collision(agent_idx)
             else:
                 self.state.collisions[agent_idx] = 0.0
 
@@ -570,8 +584,7 @@ class F110Simulator:
                     cache.side_distances,
                     self.ttc_threshold,
                 ):
-                    self.state.state[agent_idx, 3:] = 0.0
-                    self.state.collisions[agent_idx] = 1.0
+                    self._halt_on_collision(agent_idx)
         else:
             # Agent-vs-agent via GJK bounding boxes (reuse vertices already computed in _update_scans)
             for agent_idx in range(self.num_agents):

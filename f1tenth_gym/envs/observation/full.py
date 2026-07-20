@@ -122,7 +122,10 @@ class FullObservation(Observation):
             )
             std_state = state.standard_state[idx]
             base_values: dict[str, np.ndarray] = {
-                "scan": scan.astype(np.float32, copy=False),
+                # copy: scan is a view into the live sim buffer, which is
+                # overwritten in place every step. copy=False would alias it,
+                # silently corrupting stored scans (e.g. RL replay buffers).
+                "scan": scan.astype(np.float32),
                 "std_state": std_state.astype(np.float32),
                 "state": state.state[idx].astype(np.float32),
                 "collision": np.asarray(state.collisions[idx], dtype=np.float32),
