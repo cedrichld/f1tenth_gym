@@ -478,6 +478,17 @@ class F110Env(gym.Env):
         self.sim.reset(poses, option=option)
 
         if (
+            self.loop_counter_mode is LoopCounterMode.FRENET_BASED
+            and self.compute_frenet
+            and self.track is not None
+        ):
+            # Seed the lap-progress reference from the spawn arclength so laps
+            # are measured from where the car starts, not from the spline's s=0
+            # datum. Without this a car spawned at s>0 completes lap 1 early
+            # (its spawn s is counted as progress on the first step).
+            self.agents_prev_s[:] = self.sim.state.frenet[:, 0]
+
+        if (
             self.loop_counter_mode is LoopCounterMode.WINDING_ANGLE
             and self._winding_point is not None
         ):
