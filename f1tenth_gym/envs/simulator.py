@@ -523,17 +523,27 @@ class F110Simulator:
             buf[agent_idx, 5:] = 0.0   # yaw_rate, slip angle (no-op for KS); yaw at [4] preserved
         self.state.collisions[agent_idx] = 1.0
 
-    def _update_scans(self) -> None:
-        # Precompute collision vertices for every agent once (reused by inner loop and _update_agent_collisions)
-        all_vertices = []
+    def _compute_all_vertices(self) -> list:
+        """Bounding-box corner vertices for every agent from their current poses.
+
+        Independent of the LiDAR scan, so BOUNDING_BOX collision checking works
+        even when the LiDAR is disabled.
+        """
+        verts = []
         for i in range(self.num_agents):
             cp = self._collision_pose_from_base(self.state.poses[i])
-            all_vertices.append(get_vertices(
+            verts.append(get_vertices(
                 np.array([cp[0], cp[1], cp[2]], dtype=np.float64),
                 self.vehicle_params.length,
                 self.vehicle_params.width,
             ))
-        self._all_vertices = all_vertices
+        return verts
+
+    def _update_scans(self) -> None:
+        # Precompute collision vertices once (reused by the ray_cast loop and _update_agent_collisions)
+        self._all_vertices = self._compute_all_vertices()
+        all_vertices = self._all_vertices
+        wall_collision_enabled = self.collision_check_mode is not CollisionCheckMode.NONE
 
         for agent_idx, simulator in enumerate(self.scan_sims):
             pose = self.state.poses[agent_idx]
@@ -543,8 +553,8 @@ class F110Simulator:
             scan_clean = simulator.scan(scan_pose, rng=None)
             cache = self.scan_cache[agent_idx]
 
-            # Wall collision: TTC on the wall-only scan (always)
-            if check_ttc_jit(
+            # Wall collision: TTC on the wall-only scan (skipped when collisions disabled)
+            if wall_collision_enabled and check_ttc_jit(
                 scan_clean,
                 self.state.standard_state[agent_idx, 3],
                 cache.angles,
@@ -575,8 +585,15 @@ class F110Simulator:
 
     def _update_agent_collisions(self) -> None:
         """Detect agent-vs-agent collisions using the configured mode."""
-        if self.collision_check_mode is CollisionCheckMode.LIDAR_SCAN:
-            # Agent-vs-agent via TTC on opponent-shortened scans
+        mode = self.collision_check_mode
+        if mode is CollisionCheckMode.NONE:
+            return
+        if mode is CollisionCheckMode.LIDAR_SCAN:
+            # Agent-vs-agent via TTC on opponent-shortened scans. This needs the
+            # LiDAR scan; with the LiDAR disabled there is no signal, so skip
+            # (rather than indexing the empty scan cache).
+            if not self.scan_enabled:
+                return
             for agent_idx in range(self.num_agents):
                 if self.state.collisions[agent_idx]:
                     continue  # already in wall collision
@@ -591,8 +608,11 @@ class F110Simulator:
                 ):
                     self._halt_on_collision(agent_idx)
         else:
-            # Agent-vs-agent via GJK bounding boxes (reuse vertices already computed in _update_scans)
+            # Agent-vs-agent via GJK bounding boxes. Vertices come from poses,
+            # so this works even with the LiDAR disabled (_update_scans is then
+            # skipped and never sets _all_vertices).
+            vertices = self._all_vertices if self.scan_enabled else self._compute_all_vertices()
             for agent_idx in range(self.num_agents):
-                self.agent_vertices[agent_idx] = self._all_vertices[agent_idx]
+                self.agent_vertices[agent_idx] = vertices[agent_idx]
             collisions, _ = collision_multiple(self.agent_vertices)
             self.state.collisions = np.maximum(self.state.collisions, collisions.astype(np.float32))

@@ -33,8 +33,13 @@ from enum import IntEnum
 
 
 class CollisionCheckMode(IntEnum):
-    """Available collision detection strategies for the environment."""
+    """Available collision detection strategies for the environment.
 
+    NONE disables collision detection entirely (walls and agent-vs-agent);
+    ``state.collisions`` stays 0 and episodes never terminate on collision.
+    """
+
+    NONE = 0
     LIDAR_SCAN = 1
     BOUNDING_BOX = 2
 

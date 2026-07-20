@@ -77,3 +77,43 @@ class TestCollisionBehaviour(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCollisionModes(unittest.TestCase):
+    def test_none_mode_disables_collisions(self):
+        """CollisionCheckMode.NONE: driving into a wall never flags a collision (#124)."""
+        from f1tenth_gym.envs.collision_models import CollisionCheckMode
+        env = gym.make(
+            "f1tenth_gym:f1tenth-v0",
+            config=EnvConfig(
+                simulation_config=SimulationConfig(max_laps=None),
+                collision_check=CollisionCheckMode.NONE,
+                render_enabled=False,
+            ),
+        )
+        env.reset(seed=1)
+        for _ in range(400):
+            obs, _, done, _, _ = env.step(np.array([[0.4, 7.0]], dtype=np.float32))
+            self.assertEqual(float(obs["agent_0"]["collision"]), 0.0, "NONE mode flagged a collision")
+            self.assertFalse(done, "NONE mode terminated on collision")
+        env.close()
+
+    def test_lidar_disabled_does_not_crash(self):
+        """lidar_config.enabled=False must not crash step() in any collision mode (#124)."""
+        from f1tenth_gym.envs.collision_models import CollisionCheckMode
+        from f1tenth_gym.envs.lidar import LiDARConfig
+        for mode in (CollisionCheckMode.LIDAR_SCAN, CollisionCheckMode.BOUNDING_BOX, CollisionCheckMode.NONE):
+            env = gym.make(
+                "f1tenth_gym:f1tenth-v0",
+                config=EnvConfig(
+                    simulation_config=SimulationConfig(max_laps=None),
+                    lidar_config=LiDARConfig(enabled=False),
+                    collision_check=mode,
+                    num_agents=2,
+                    render_enabled=False,
+                ),
+            )
+            env.reset(seed=1)
+            for _ in range(20):
+                env.step(np.zeros((2, 2), dtype=np.float32))
+            env.close()
