@@ -12,6 +12,7 @@ from f1tenth_gym.envs.env_config import (
 from f1tenth_gym.envs.lidar import LiDARConfig
 from f1tenth_gym.envs.dynamic_models import F1TENTH_VEHICLE_PARAMETERS
 from f1tenth_gym.envs.integrators import IntegratorType
+from f1tenth_gym.envs.observation import ObservationType
 
 
 class TestControlConfigValidation(unittest.TestCase):
@@ -189,10 +190,17 @@ class TestObservationConfigValidation(unittest.TestCase):
 
     def test_with_updates(self):
         """Test with_updates method."""
-        cfg = ObservationConfig(features=("scan",))
+        cfg = ObservationConfig(type=ObservationType.FEATURES, features=("scan",))
         updated = cfg.with_updates(features=("scan", "pose"))
         self.assertEqual(cfg.features, ("scan",))
         self.assertEqual(updated.features, ("scan", "pose"))
+
+    def test_features_requires_features_type(self):
+        """`features` with a non-FEATURES type is a config error, not a silent no-op."""
+        with self.assertRaises(ValueError):
+            ObservationConfig(type=ObservationType.KINEMATIC_STATE, features=("pose_x",))
+        # allowed with the FEATURES type
+        ObservationConfig(type=ObservationType.FEATURES, features=("pose_x",))
 
 
 class TestResetConfigValidation(unittest.TestCase):

@@ -112,6 +112,17 @@ class ObservationConfig:
     type: ObservationType = ObservationType.DIRECT
     features: Optional[tuple[str, ...]] = None
 
+    def __post_init__(self) -> None:
+        # `features` only affects the FEATURES observation type; every other
+        # type uses a fixed preset, so silently ignoring features here hides a
+        # config mistake (the user probably meant type=FEATURES).
+        if self.features is not None and self.type is not ObservationType.FEATURES:
+            raise ValueError(
+                f"observation `features` only applies to ObservationType.FEATURES, "
+                f"but type={self.type.name}. Use ObservationType.FEATURES to select a "
+                f"custom field subset, or drop `features`."
+            )
+
     def with_updates(self, **changes: Any) -> "ObservationConfig":
         return replace(self, **changes)
 
