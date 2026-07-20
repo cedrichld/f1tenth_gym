@@ -117,3 +117,22 @@ class TestCollisionModes(unittest.TestCase):
             for _ in range(20):
                 env.step(np.zeros((2, 2), dtype=np.float32))
             env.close()
+
+    def test_bounding_box_does_not_rebind_collisions(self):
+        """BOUNDING_BOX must update state.collisions in place, not rebind it
+        (a rebind leaves any captured sim.state.collisions handle stale)."""
+        from f1tenth_gym.envs.collision_models import CollisionCheckMode
+        env = gym.make(
+            "f1tenth_gym:f1tenth-v0",
+            config=EnvConfig(
+                simulation_config=SimulationConfig(max_laps=None),
+                collision_check=CollisionCheckMode.BOUNDING_BOX,
+                render_enabled=False,
+            ),
+        )
+        env.reset(seed=1)
+        handle = env.unwrapped.sim.state.collisions
+        for _ in range(5):
+            env.step(np.array([[0.2, 3.0]], dtype=np.float32))
+        self.assertIs(handle, env.unwrapped.sim.state.collisions, "collisions array was rebound")
+        env.close()

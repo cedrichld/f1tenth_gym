@@ -615,4 +615,6 @@ class F110Simulator:
             for agent_idx in range(self.num_agents):
                 self.agent_vertices[agent_idx] = vertices[agent_idx]
             collisions, _ = collision_multiple(self.agent_vertices)
-            self.state.collisions = np.maximum(self.state.collisions, collisions.astype(np.float32))
+            # in place: rebinding self.state.collisions would leave any handle
+            # captured from sim.state.collisions stale (LIDAR_SCAN writes in place).
+            self.state.collisions[:] = np.maximum(self.state.collisions, collisions.astype(np.float32))
