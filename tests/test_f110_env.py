@@ -273,3 +273,20 @@ class TestEnvInterface(unittest.TestCase):
             f"All envs should be done twice, got {all_dones_twice}",
         )
 
+
+
+class TestInfoDict(unittest.TestCase):
+    def test_info_lap_arrays_are_copies(self):
+        """info['lap_times']/['lap_counts'] must be copies, not the env's live
+        arrays -- otherwise a stored info dict mutates retroactively."""
+        env = gym.make("f1tenth_gym:f1tenth-v0", config=EnvConfig())
+        _, info_reset = env.reset(seed=1)
+        self.assertIsNot(info_reset["lap_counts"], env.unwrapped.lap_counts)
+        _, _, _, _, info_step = env.step(np.zeros((1, 2), dtype=np.float32))
+        self.assertIsNot(info_step["lap_times"], env.unwrapped.lap_times)
+        snapshot = np.array(info_step["lap_counts"])
+        env.unwrapped.lap_counts[0] = 999.0  # mutate the live array
+        np.testing.assert_array_equal(
+            info_step["lap_counts"], snapshot, "stored info mutated when the env array changed"
+        )
+        env.close()

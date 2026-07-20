@@ -419,7 +419,9 @@ class F110Env(gym.Env):
         self.sim_time = self.sim.state.sim_time
 
         truncated = False
-        info = {"lap_times": self.lap_times, "lap_counts": self.lap_counts, "sim_time": self.sim_time}
+        # copy: these are the env's live arrays, mutated every step; without a
+        # copy a stored info dict would change retroactively (breaks logging).
+        info = {"lap_times": self.lap_times.copy(), "lap_counts": self.lap_counts.copy(), "sim_time": self.sim_time}
 
         return obs, reward, done, truncated, info
 
@@ -504,7 +506,9 @@ class F110Env(gym.Env):
             else:
                 self.render_obs = copy.deepcopy(self.render_obs_type.observe())
 
-        info = {"lap_times": self.lap_times, "lap_counts": self.lap_counts, "sim_time": self.sim_time}
+        # copy: these are the env's live arrays, mutated every step; without a
+        # copy a stored info dict would change retroactively (breaks logging).
+        info = {"lap_times": self.lap_times.copy(), "lap_counts": self.lap_counts.copy(), "sim_time": self.sim_time}
 
         return obs, info
 
