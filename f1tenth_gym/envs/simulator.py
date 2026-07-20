@@ -265,9 +265,14 @@ class F110Simulator:
         if self.config.simulation_config.compute_frenet_frame and self.track is not None:
             for agent_idx in range(self.num_agents):
                 pose = self.state.poses[agent_idx]
+                # Anchor the local arclength search to THIS agent's own previous s.
+                # Falling back to the shared Track.s_guess windows each agent around
+                # the *previous* agent's position, corrupting multi-agent Frenet.
+                prev_s = float(self.state.frenet[agent_idx, 0])
                 self.state.frenet[agent_idx] = np.array(
                     self.track.cartesian_to_frenet(
-                        float(pose[0]), float(pose[1]), float(pose[2])
+                        float(pose[0]), float(pose[1]), float(pose[2]),
+                        s_guess=prev_s, use_s_guess=True,
                     ),
                     dtype=np.float32,
                 )
