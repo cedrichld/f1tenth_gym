@@ -176,21 +176,26 @@ class F110Simulator:
             for i, simulator in enumerate(self.scan_sims):
                 self.scan_cache[i] = self._build_scan_cache(simulator, vehicle_params)
 
-    def reset(self, poses: np.ndarray, *, option: str = "pose") -> None:
+    def reset(self, poses: np.ndarray, *, option: str = "pose", noise_seed: int | None = None) -> None:
         """Reset all agents to initial positions.
 
         Args:
             poses: Initial positions, shape (num_agents, 3) for poses or
                    (num_agents, state_dim) for full state.
             option: Reset mode - "pose" for (x, y, theta) or "state" for full state.
+            noise_seed: Seed for the per-agent LiDAR-noise RNGs. ``None`` falls
+                back to the config seed (legacy behaviour); the env passes a
+                value derived from ``reset(seed=...)`` so the noise stream is
+                controlled by the reset seed, per the gymnasium contract.
         """
         if poses.shape[0] != self.num_agents:
             raise ValueError("Number of poses does not match number of agents")
 
         self.state.reset()
         if self.scan_enabled:
+            base_seed = self.seed if noise_seed is None else int(noise_seed)
             for idx in range(self.num_agents):
-                self.scan_rngs[idx] = np.random.default_rng(self.seed + idx)
+                self.scan_rngs[idx] = np.random.default_rng(base_seed + idx)
         for i in range(self.num_agents):
             if option == "pose":
                 self.state.state[i] = self.model.get_initial_state(

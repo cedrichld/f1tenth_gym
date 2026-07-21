@@ -290,3 +290,39 @@ class TestInfoDict(unittest.TestCase):
             info_step["lap_counts"], snapshot, "stored info mutated when the env array changed"
         )
         env.close()
+
+
+class TestLidarNoiseSeeding(unittest.TestCase):
+    """reset(seed) must control the LiDAR noise stream (gymnasium seeding)."""
+
+    def _scan_at_fixed_pose(self, env, pose, seed):
+        if seed is None:
+            env.reset(options={"poses": pose})
+        else:
+            env.reset(seed=seed, options={"poses": pose})
+        obs, *_ = env.step(np.array([[0.0, 0.0]], dtype=np.float32))  # stay put
+        return obs["agent_0"]["scan"].copy()
+
+    def test_reset_seed_controls_noise(self):
+        from f1tenth_gym.envs.env_config import SimulationConfig
+        from f1tenth_gym.envs.lidar import LiDARConfig
+        env = gym.make(
+            "f1tenth_gym:f1tenth-v0",
+            config=EnvConfig(
+                simulation_config=SimulationConfig(max_laps=None),
+                lidar_config=LiDARConfig(noise_std=0.05),
+                render_enabled=False,
+            ),
+        )
+        cl = env.unwrapped.track.centerline
+        pose = np.array([[float(cl.xs[50]), float(cl.ys[50]), 0.0]], dtype=np.float32)
+        a = self._scan_at_fixed_pose(env, pose, 42)
+        b = self._scan_at_fixed_pose(env, pose, 42)
+        c = self._scan_at_fixed_pose(env, pose, 99)
+        np.testing.assert_array_equal(a, b, "same reset seed should reproduce the noise")
+        self.assertFalse(np.allclose(a, c), "different reset seed should change the noise")
+        # no-seed resets must not be byte-identical episode to episode
+        d = self._scan_at_fixed_pose(env, pose, None)
+        e = self._scan_at_fixed_pose(env, pose, None)
+        self.assertFalse(np.allclose(d, e), "no-seed noise was identical across episodes")
+        env.close()

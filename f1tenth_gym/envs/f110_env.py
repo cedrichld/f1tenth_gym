@@ -499,7 +499,11 @@ class F110Env(gym.Env):
         else:
             raise ValueError("Invalid reset option.")
 
-        self.sim.reset(poses, option=option)
+        # Derive the LiDAR-noise seed from the env RNG (which gymnasium seeds
+        # from reset(seed=...)), so the noise stream is controlled by the reset
+        # seed rather than being byte-identical every episode.
+        noise_seed = int(self.np_random.integers(0, 2**31 - 1))
+        self.sim.reset(poses, option=option, noise_seed=noise_seed)
 
         if (
             self.loop_counter_mode is LoopCounterMode.FRENET_BASED
