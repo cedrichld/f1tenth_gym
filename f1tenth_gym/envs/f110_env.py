@@ -144,7 +144,7 @@ class F110Env(gym.Env):
         self.env_config = resolved_config
         self.render_mode = render_mode
         self.renderer = None
-        self.render_spec = None
+        self.render_config = None
         self.render_obs = None
 
         self._apply_env_config()
@@ -220,7 +220,7 @@ class F110Env(gym.Env):
         if self.render_enabled and self.renderer is not None:
             self.renderer.close()
         self.renderer = None
-        self.render_spec = None
+        self.render_config = None
 
         self.track = self._resolve_track()
 
@@ -323,16 +323,16 @@ class F110Env(gym.Env):
         self._elapsed_steps = 0
 
         if self.render_enabled:
-            self.renderer, self.render_spec = make_renderer(
+            self.renderer, self.render_config = make_renderer(
                 params=self.vehicle_params,
                 track=self.track,
                 agent_ids=self.agent_ids,
                 render_mode=self.render_mode,
-                render_fps=self.render_cfg.render_fps,
+                render_config=self.render_cfg,
             )
         else:
             self.renderer = None
-            self.render_spec = None
+            self.render_config = None
 
     def _check_done(self):
         """

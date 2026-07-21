@@ -162,6 +162,16 @@ class RenderConfig:
             modes. ``1.0`` = real time, ``5.0`` = 5x faster, ``float("inf")``
             = no pacing (free-run). Ignored in rgb_array mode (never paces).
             Togglable at runtime via ``F110Env.set_real_time_factor``.
+        window_size: Square render/frame size in pixels (also the recorded
+            rgb_array / video resolution).
+        focus_on: Agent id the camera follows (e.g. ``"agent_0"``); ``None`` =
+            map view.
+        vehicle_palette: Per-agent car colours (hex strings, cycled by index).
+        show_wheels: Draw the wheels on each car.
+        render_map_img: Draw the occupancy-map image under the scene.
+        car_thickness: Car outline thickness in pixels.
+        bigger_car_when_map_centered: Scale cars up in the zoomed-out map view.
+        show_lap_info: Overlay the lap-time / lap-count label on the frame.
 
     Rendering uses the OpenGL backend and therefore needs an X display (real or
     a virtual one via ``xvfb``); see ``make_renderer`` for headless/Colab setup.
@@ -169,16 +179,31 @@ class RenderConfig:
 
     render_fps: int = 60
     real_time_factor: float = 1.0
+    window_size: int = 800
+    focus_on: Optional[str] = "agent_0"
+    vehicle_palette: tuple[str, ...] = (
+        "#FD3754", "#377eb8", "#984ea3", "#e41a1c", "#ff7f00",
+        "#a65628", "#f781bf", "#888888", "#a6cee3", "#b2df8a",
+    )
+    show_wheels: bool = True
+    render_map_img: bool = True
+    car_thickness: int = 1
+    bigger_car_when_map_centered: bool = True
+    show_lap_info: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "render_fps", int(self.render_fps))
         object.__setattr__(self, "real_time_factor", float(self.real_time_factor))
+        object.__setattr__(self, "window_size", int(self.window_size))
+        object.__setattr__(self, "car_thickness", int(self.car_thickness))
         if self.render_fps <= 0:
             raise ValueError(f"render_fps must be > 0, got {self.render_fps}")
         if not (self.real_time_factor > 0):
             raise ValueError(
                 f"real_time_factor must be > 0 (or float('inf')), got {self.real_time_factor}"
             )
+        if self.window_size <= 0:
+            raise ValueError(f"window_size must be > 0, got {self.window_size}")
 
     def with_updates(self, **changes: Any) -> "RenderConfig":
         return replace(self, **changes)

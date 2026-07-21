@@ -2,9 +2,12 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph.opengl as gl
 
-from .renderer import RenderSpec, EnvRenderer, ObjectRenderer
+from .renderer import EnvRenderer, ObjectRenderer
 from ..dynamic_models import VehicleParameters
-from typing import Optional, Union
+from typing import Optional, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..env_config import RenderConfig
 
 
 class CarRenderer(ObjectRenderer):
@@ -14,7 +17,7 @@ class CarRenderer(ObjectRenderer):
     def __init__(
         self,
         env_renderer: EnvRenderer,
-        render_spec: RenderSpec,
+        render_config: "RenderConfig",
         map_origin: tuple[float, float],
         resolution: float,
         car_length: float,
@@ -25,8 +28,8 @@ class CarRenderer(ObjectRenderer):
         self.car_length = car_length
         self.car_width = car_width
         self.wheel_size = wheel_size
-        self.car_thickness = render_spec.car_tickness
-        self.show_wheels = render_spec.show_wheels
+        self.car_thickness = render_config.car_thickness
+        self.show_wheels = render_config.show_wheels
         self.opacity = 1.0
         self.rgba = [c / 255 for c in color] + [self.opacity]
         self.rgba = np.array([self.rgba] * 2)

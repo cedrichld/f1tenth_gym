@@ -4,15 +4,18 @@ import logging
 import numpy as np
 import pyqtgraph.opengl as gl
 from PyQt6 import QtWidgets, QtCore, QtGui
-from typing import Optional, Union
+from typing import Optional, Union, TYPE_CHECKING
 from PIL import ImageColor
 from PyQt6.QtGui import QImage
 
 from ..track import Track
 from ..dynamic_models import VehicleParameters
-from .renderer import EnvRenderer, RenderSpec, ObjectRenderer
+from .renderer import EnvRenderer, ObjectRenderer
 from .pyqtgl_objects import PointsRenderer, LinesRenderer, ClosedLinesRenderer, CarRenderer
 import cv2
+
+if TYPE_CHECKING:
+    from ..env_config import RenderConfig
 
 # Top-down camera azimuth (degrees) that renders the world north-up:
 # world +x -> screen right, world +y -> screen up. With azimuth 0 the view is
@@ -26,20 +29,18 @@ class PyQtEnvRendererGL(EnvRenderer):
         params: VehicleParameters,
         track: Track,
         agent_ids: list[str],
-        render_spec: RenderSpec,
+        render_config: "RenderConfig",
         render_mode: str,
-        render_fps: int,
     ):
         super().__init__()
         self.camera_free_rotation = 0
         self.params = params
         self.agent_ids = agent_ids
-        self.render_spec = render_spec
+        self.render_config = render_config
         self.render_mode = render_mode
-        self.render_fps = render_fps
-        if render_spec.focus_on:
-            self.agent_to_follow_setting = self.agent_ids.index(render_spec.focus_on)
-            self.agent_to_follow = self.agent_ids.index(render_spec.focus_on)
+        if render_config.focus_on:
+            self.agent_to_follow_setting = self.agent_ids.index(render_config.focus_on)
+            self.agent_to_follow = self.agent_ids.index(render_config.focus_on)
         else:
             self.agent_to_follow = None
         self.car_scale = 1.0
@@ -60,11 +61,11 @@ class PyQtEnvRendererGL(EnvRenderer):
 
         self.view.setCameraPosition(pos=QtGui.QVector3D(0, 0, 0), distance=self.default_camera_dist, elevation=90, azimuth=_TOP_DOWN_AZIMUTH)
         self.view.setBackgroundColor("w")
-        self.view.resize(self.render_spec.window_size, self.render_spec.window_size)
+        self.view.resize(self.render_config.window_size, self.render_config.window_size)
 
         self.window = QtWidgets.QMainWindow()
         self.window.setWindowTitle("F1Tenth Gym - OpenGL")
-        self.window.setGeometry(0, 0, self.render_spec.window_size, self.render_spec.window_size)
+        self.window.setGeometry(0, 0, self.render_config.window_size, self.render_config.window_size)
         
         if not self.camera_free_rotation:
             self._enable_pan_only()
@@ -74,14 +75,14 @@ class PyQtEnvRendererGL(EnvRenderer):
         # FPS label
         text_rgb = (125, 125, 125)
 
-        if self.render_spec.frame_output_info_label:
+        if self.render_config.show_lap_info:
             self.lap_label = QtWidgets.QLabel(self.view)
             font = QtGui.QFont("Arial", 14)
             self.lap_label.setFont(font)
             self.lap_label.setStyleSheet(
                 f"color: rgb({text_rgb[0]}, {text_rgb[1]}, {text_rgb[2]}); background-color: transparent; padding: 2px;"
             )
-            self.lap_label.move(int(self.render_spec.window_size) - 220, 10)
+            self.lap_label.move(int(self.render_config.window_size) - 220, 10)
             self.lap_label.resize(220, 30)
             self.lap_label.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             self.lap_label.show()
@@ -108,7 +109,7 @@ class PyQtEnvRendererGL(EnvRenderer):
         
         # Colors
         self.car_colors = [
-            tuple(ImageColor.getcolor(c, "RGB")) for c in render_spec.vehicle_palette
+            tuple(ImageColor.getcolor(c, "RGB")) for c in render_config.vehicle_palette
         ]
 
         if self.render_mode in ["human", "human_fast", 'unlimited']:
@@ -147,7 +148,7 @@ class PyQtEnvRendererGL(EnvRenderer):
         image_item.translate(px, py, -0.01)  # Slightly below the map
         image_item.scale(res, res, 1)
         image_item.setGLOptions('translucent') 
-        if self.render_spec.render_map_img:
+        if self.render_config.render_map_img:
             self.view.addItem(image_item)
         
     def _get_map_bounds(self):
@@ -163,7 +164,7 @@ class PyQtEnvRendererGL(EnvRenderer):
         # Compute center and extent
         center = (min_xy + max_xy) / 2
         extent = max(max_xy - min_xy)
-        if self.render_spec.bigger_car_when_map_centered:
+        if self.render_config.bigger_car_when_map_centered:
             self.car_scale = extent/self.params.width / 120
         # Fixed height above map
         x, y = center
@@ -251,7 +252,7 @@ class PyQtEnvRendererGL(EnvRenderer):
                 car_length=float(self.params.length),
                 car_width=float(self.params.width),
                 color=self.car_colors[ic],
-                render_spec=self.render_spec,
+                render_config=self.render_config,
                 map_origin=self.map_origin[:2],
                 resolution=self.map_resolution,
             ) for ic in range(len(self.agent_ids))
@@ -272,7 +273,7 @@ class PyQtEnvRendererGL(EnvRenderer):
                 if self.render_mode != "rgb_array":
                     self.window.show()
                 self.init = False
-            if self.obs is not None and self.render_spec.frame_output_info_label:
+            if self.obs is not None and self.render_config.show_lap_info:
                 self.lap_label.setText(f"Lap Time {self.obs[self.agent_ids[0]]['lap_time']:.2f}, " +
                     f"Lap {int(self.obs[self.agent_ids[0]]['lap_count']):d}")
 
@@ -311,7 +312,7 @@ class PyQtEnvRendererGL(EnvRenderer):
         # Pin the output to window_size regardless of the display's device-pixel
         # ratio (a HiDPI X server grabs window_size*dpr; xvfb grabs window_size),
         # so recorded frame shapes are deterministic across machines.
-        target = int(self.render_spec.window_size)
+        target = int(self.render_config.window_size)
         if qimg.width() != target or qimg.height() != target:
             qimg = qimg.scaled(target, target)
 
@@ -331,7 +332,7 @@ class PyQtEnvRendererGL(EnvRenderer):
         # img_array = np.flip(img_array, axis=0)
         
         # Overlay text information using OpenCV
-        if self.render_spec.frame_output_info_label:
+        if self.render_config.show_lap_info:
             self._overlay_text_on_frame(img_array)
 
         return img_array
@@ -380,7 +381,8 @@ class PyQtEnvRendererGL(EnvRenderer):
 
         if elapsed >= 1.0:
             fps = self.frame_count / elapsed
-            self.fps_label.setText(f"FPS: {fps:.0f}")
+            if self.render_config.show_lap_info:  # fps_label only exists then
+                self.fps_label.setText(f"FPS: {fps:.0f}")
             self.last_time = now
             self.frame_count = 0
         self.view.update()

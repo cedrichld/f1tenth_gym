@@ -1,15 +1,15 @@
 import os
 from typing import Optional, TYPE_CHECKING
 
-from .renderer import RenderSpec, EnvRenderer, ObjectRenderer
+from .renderer import EnvRenderer, ObjectRenderer
 from .callbacks import make_lidar_scan_callback
 from ..dynamic_models import VehicleParameters
 
 if TYPE_CHECKING:
     from ..track import Track
+    from ..env_config import RenderConfig
 
 __all__ = [
-    "RenderSpec",
     "EnvRenderer",
     "ObjectRenderer",
     "make_lidar_scan_callback",
@@ -38,10 +38,9 @@ def make_renderer(
     track: "Track",
     agent_ids: list[str],
     render_mode: Optional[str] = None,
-    render_fps: Optional[int] = 60,
-    render_spec: RenderSpec = RenderSpec(),
-) -> tuple[EnvRenderer, RenderSpec]:
-    """Return a GL renderer and the render spec.
+    render_config: "RenderConfig" = None,
+) -> tuple[EnvRenderer, "RenderConfig"]:
+    """Return a GL renderer and the RenderConfig it was built from.
 
     All rendering uses the OpenGL backend (``PyQtEnvRendererGL``), which needs
     an X display -- real or virtual (``xvfb``). If a display render mode is
@@ -51,6 +50,10 @@ def make_renderer(
     needs_display = render_mode in _DISPLAY_RENDER_MODES
     if needs_display and not os.environ.get("DISPLAY"):
         raise RuntimeError(NO_DISPLAY_GUIDANCE)
+
+    if render_config is None:
+        from ..env_config import RenderConfig  # local import avoids an import cycle
+        render_config = RenderConfig()
 
     if render_mode == "rgb_array":
         # off-screen grab from the GL framebuffer under a real/virtual X server
@@ -63,10 +66,9 @@ def make_renderer(
             params=params,
             track=track,
             agent_ids=agent_ids,
-            render_spec=render_spec,
+            render_config=render_config,
             render_mode=render_mode,
-            render_fps=render_fps,
         )
     else:
         renderer = None
-    return renderer, render_spec
+    return renderer, render_config

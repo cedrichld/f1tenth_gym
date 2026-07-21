@@ -162,6 +162,37 @@ class TestRenderer(unittest.TestCase):
         self.assertEqual(env.unwrapped.render_fps, 45)
         env.close()
 
+    def test_window_size_controls_frame_shape(self):
+        """RenderConfig.window_size drives the rgb_array frame / video resolution
+        (proves the RenderSpec->RenderConfig migration is wired through)."""
+        env = gym.make(
+            "f1tenth_gym:f1tenth-v0",
+            config=EnvConfig(
+                observation_config=ObservationConfig(type=ObservationType.KINEMATIC_STATE),
+                simulation_config=SimulationConfig(max_laps=None),
+                render_config=RenderConfig(window_size=512, focus_on=None, show_lap_info=False),
+            ),
+            render_mode="rgb_array",
+        )
+        env.reset(seed=1)
+        for _ in range(3):
+            env.step(np.array([[0.0, 2.0]], dtype=np.float32))
+            frame = env.render()
+        self.assertEqual(frame.shape, (512, 512, 3))
+        env.close()
+
+
+class TestRenderConfigFields(unittest.TestCase):
+    def test_render_config_exposes_visual_fields(self):
+        """The RenderSpec visual fields are now on RenderConfig (RenderSpec retired)."""
+        fields = set(RenderConfig().__dataclass_fields__)
+        for f in ("window_size", "focus_on", "vehicle_palette", "show_wheels",
+                  "render_map_img", "car_thickness", "bigger_car_when_map_centered",
+                  "show_lap_info"):
+            self.assertIn(f, fields)
+        with self.assertRaises(ValueError):
+            RenderConfig(window_size=0)
+
 
 class TestNoDisplayGuidance(unittest.TestCase):
     """make_renderer must fail loudly with setup guidance when no display exists."""
