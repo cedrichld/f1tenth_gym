@@ -185,6 +185,37 @@ class RenderConfig:
 
 
 @dataclass(frozen=True)
+class TerminationConfig:
+    """Configuration for episode termination and truncation.
+
+    Attributes:
+        max_episode_steps: If set, the episode is truncated (``truncated=True``)
+            once this many steps have elapsed since reset. ``None`` = no limit.
+        terminate_on_collision: Whether a collision ends the episode
+            (``terminated=True``).
+        collision_agents: Whose collisions count when ``terminate_on_collision``
+            is set: ``"ego"`` (only the ego agent) or ``"any"`` (any agent).
+    """
+
+    max_episode_steps: Optional[int] = None
+    terminate_on_collision: bool = True
+    collision_agents: str = "ego"
+
+    def __post_init__(self) -> None:
+        if self.max_episode_steps is not None and self.max_episode_steps < 1:
+            raise ValueError(
+                f"max_episode_steps must be >= 1 or None, got {self.max_episode_steps}"
+            )
+        if self.collision_agents not in ("ego", "any"):
+            raise ValueError(
+                f"collision_agents must be 'ego' or 'any', got {self.collision_agents!r}"
+            )
+
+    def with_updates(self, **changes: Any) -> "TerminationConfig":
+        return replace(self, **changes)
+
+
+@dataclass(frozen=True)
 class EnvConfig:
     """Main configuration for the F1TENTH environment.
 
@@ -201,6 +232,7 @@ class EnvConfig:
         reset_config: Episode reset configuration.
         lidar_config: LiDAR sensor configuration.
         render_config: Rendering pacing / frame-output configuration.
+        termination_config: Episode termination / truncation configuration.
         collision_check: Collision detection mode.
         render_enabled: Whether rendering is enabled.
     """
@@ -217,6 +249,7 @@ class EnvConfig:
     reset_config: ResetConfig = field(default_factory=ResetConfig)
     lidar_config: LiDARConfig = field(default_factory=LiDARConfig)
     render_config: RenderConfig = field(default_factory=RenderConfig)
+    termination_config: TerminationConfig = field(default_factory=TerminationConfig)
     collision_check: CollisionCheckMode = CollisionCheckMode.LIDAR_SCAN
     render_enabled: bool = True
 
@@ -264,6 +297,10 @@ class EnvConfig:
         if not isinstance(render_cfg, RenderConfig):
             raise TypeError("render must be a RenderConfig instance")
 
+        termination_cfg = self.termination_config
+        if not isinstance(termination_cfg, TerminationConfig):
+            raise TypeError("termination must be a TerminationConfig instance")
+
         if (
             simulation_cfg.loop_counter is LoopCounterMode.FRENET_BASED
             and not simulation_cfg.compute_frenet_frame
@@ -276,6 +313,7 @@ class EnvConfig:
         object.__setattr__(self, "reset_config", reset_cfg)
         object.__setattr__(self, "lidar_config", lidar_cfg)
         object.__setattr__(self, "render_config", render_cfg)
+        object.__setattr__(self, "termination_config", termination_cfg)
 
     def with_updates(self, **changes: Any) -> "EnvConfig":
         return replace(self, **changes)

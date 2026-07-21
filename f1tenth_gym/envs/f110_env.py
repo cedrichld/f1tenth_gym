@@ -184,6 +184,11 @@ class F110Env(gym.Env):
         self.reset_cfg = cfg.reset_config
         self.lidar_cfg = cfg.lidar_config
         self.render_cfg = cfg.render_config
+        self.termination_cfg = cfg.termination_config
+
+        self.max_episode_steps = self.termination_cfg.max_episode_steps
+        self.terminate_on_collision = self.termination_cfg.terminate_on_collision
+        self.collision_agents = self.termination_cfg.collision_agents
 
         self.longitudinal_action_type = self.control_cfg.longitudinal_mode
         self.steer_action_type = self.control_cfg.steering_mode
@@ -315,6 +320,7 @@ class F110Env(gym.Env):
             timestep=self.timestep,
         )
         self._last_frame = None
+        self._elapsed_steps = 0
 
         if self.render_enabled:
             self.renderer, self.render_spec = make_renderer(
@@ -377,10 +383,15 @@ class F110Env(gym.Env):
                     self.lap_times[ind] = self.sim_time - self.lap_times_finish[ind]
                     self.lap_times_finish[ind] = self.sim_time
 
-        done = bool(self.sim.collisions[self.ego_idx])
+        terminated = False
+        if self.terminate_on_collision:
+            if self.collision_agents == "any":
+                terminated = bool(np.any(self.sim.collisions))
+            else:  # "ego"
+                terminated = bool(self.sim.collisions[self.ego_idx])
         if self.max_laps is not None:
-            done = done or (self.lap_counts[self.ego_idx] >= self.max_laps)
-        return done
+            terminated = terminated or (self.lap_counts[self.ego_idx] >= self.max_laps)
+        return terminated
 
     def step(self, action):
         """
@@ -398,13 +409,14 @@ class F110Env(gym.Env):
 
         # call simulation step
         self.sim.step(action)
+        self._elapsed_steps += 1
 
         # advance the render clock's sim-time frame accumulator (drives fixed-fps
         # frame emission; decoupled from how often the user calls render()).
         self._render_clock.advance()
 
         # check done
-        done = self._check_done()
+        terminated = self._check_done()
 
         # observation
         obs = self.observation_type.observe()
@@ -418,12 +430,20 @@ class F110Env(gym.Env):
         reward = self.timestep
         self.sim_time = self.sim.state.sim_time
 
-        truncated = False
+        truncated = (
+            self.max_episode_steps is not None
+            and self._elapsed_steps >= self.max_episode_steps
+        )
         # copy: these are the env's live arrays, mutated every step; without a
         # copy a stored info dict would change retroactively (breaks logging).
-        info = {"lap_times": self.lap_times.copy(), "lap_counts": self.lap_counts.copy(), "sim_time": self.sim_time}
+        info = {
+            "lap_times": self.lap_times.copy(),
+            "lap_counts": self.lap_counts.copy(),
+            "sim_time": self.sim_time,
+            "collisions": self.sim.collisions.copy(),  # per-agent collision flags
+        }
 
-        return obs, reward, done, truncated, info
+        return obs, reward, terminated, truncated, info
 
     def reset(self, seed=None, options=None):
         """
@@ -442,6 +462,7 @@ class F110Env(gym.Env):
         super().reset(seed=seed)
 
         self.sim_time = 0.0
+        self._elapsed_steps = 0
         self._render_clock.reset()
         self._last_frame = None
         if self.loop_counter_mode is LoopCounterMode.FRENET_BASED:
