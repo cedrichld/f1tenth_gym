@@ -133,9 +133,40 @@ class ResetConfig:
 
     Attributes:
         strategy: Reset strategy for initial agent positions.
+        min_dist: Minimum spacing between agents' spawn points, in metres.
+            ``None`` = the strategy's default (1.5 for RL, 0.5 for map).
+        max_dist: Maximum spacing between agents' spawn points, in metres.
+            ``None`` = the strategy's default (2.5 for RL, 1.0 for map).
+        shuffle: Override whether agent spawn order is shuffled. ``None`` uses
+            the strategy default (STATIC strategies don't shuffle).
+        move_laterally: Override whether spawns are offset laterally off the
+            reference line. ``None`` uses the strategy default.
     """
 
     strategy: ResetStrategy = ResetStrategy.RL_GRID_STATIC
+    min_dist: Optional[float] = None
+    max_dist: Optional[float] = None
+    shuffle: Optional[bool] = None
+    move_laterally: Optional[bool] = None
+
+    def __post_init__(self) -> None:
+        if self.min_dist is not None and self.min_dist < 0:
+            raise ValueError(f"min_dist must be >= 0, got {self.min_dist}")
+        if self.max_dist is not None and self.max_dist <= 0:
+            raise ValueError(f"max_dist must be > 0, got {self.max_dist}")
+        if (
+            self.min_dist is not None
+            and self.max_dist is not None
+            and self.min_dist >= self.max_dist
+        ):
+            raise ValueError(
+                f"min_dist ({self.min_dist}) must be < max_dist ({self.max_dist})"
+            )
+
+    def reset_kwargs(self) -> dict:
+        """Non-None reset params, to forward to ``make_reset_fn``."""
+        keys = ("min_dist", "max_dist", "shuffle", "move_laterally")
+        return {k: getattr(self, k) for k in keys if getattr(self, k) is not None}
 
     def with_updates(self, **changes: Any) -> "ResetConfig":
         return replace(self, **changes)

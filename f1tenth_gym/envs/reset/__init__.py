@@ -53,11 +53,13 @@ def _rl_reset_factory(
     move_laterally: bool,
 ) -> Callable[[Track, int, dict], ResetFn]:
     def factory(track: Track, num_agents: int, kwargs: dict) -> ResetFn:
+        kwargs = dict(kwargs)  # don't mutate the caller's dict
         return builder(
             reference_line=track.raceline,
             num_agents=num_agents,
-            shuffle=shuffle,
-            move_laterally=move_laterally,
+            # config may override the strategy's shuffle / lateral defaults
+            shuffle=kwargs.pop("shuffle", shuffle),
+            move_laterally=kwargs.pop("move_laterally", move_laterally),
             **kwargs,
         )
 
@@ -70,11 +72,12 @@ def _map_reset_factory(
     move_laterally: bool,
 ) -> Callable[[Track, int, dict], ResetFn]:
     def factory(track: Track, num_agents: int, kwargs: dict) -> ResetFn:
+        kwargs = dict(kwargs)  # don't mutate the caller's dict
         return AllMapResetFn(
             track=track,
             num_agents=num_agents,
-            shuffle=shuffle,
-            move_laterally=move_laterally,
+            shuffle=kwargs.pop("shuffle", shuffle),
+            move_laterally=kwargs.pop("move_laterally", move_laterally),
             **kwargs,
         )
 

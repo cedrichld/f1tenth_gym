@@ -296,6 +296,7 @@ class F110Env(gym.Env):
             track=self.track,
             num_agents=self.num_agents,
             type=self.reset_cfg.strategy,
+            **self.reset_cfg.reset_kwargs(),
         )
 
         # metadata["render_fps"] is the RecordVideo *container* framerate. Frames are
