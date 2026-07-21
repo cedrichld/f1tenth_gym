@@ -16,7 +16,7 @@ from .action import (
 from .collision_models import CollisionCheckMode, collision_multiple, get_vertices
 from .dynamic_models import DynamicModel, VehicleParameters
 from .env_config import EnvConfig
-from .lidar import ScanSimulator2D, check_ttc_jit, ray_cast
+from .lidar import ScanSimulator2D, check_collision, ray_cast
 from .state import SimulationState
 from .track import Track
 
@@ -30,13 +30,12 @@ class ScanCache:
     """Precomputed LiDAR geometry for collision detection.
 
     Attributes:
-        angles: Beam angles relative to vehicle heading.
-        cosines: Cosines of beam angles.
-        side_distances: Distance from vehicle center to edge per beam.
+        angles: Beam angles relative to vehicle heading (used by ray_cast).
+        side_distances: Distance from the LiDAR to the vehicle body edge per
+            beam (used by the collision check).
     """
 
     angles: np.ndarray
-    cosines: np.ndarray
     side_distances: np.ndarray
 
 
@@ -53,7 +52,7 @@ class F110Simulator:
         num_agents: Number of agents in the simulation.
     """
 
-    ttc_threshold: float = 0.005
+    collision_margin: float = 0.005  # metres; a beam collides when scan - side_distance <= this
 
     def __init__(
         self,
@@ -320,9 +319,6 @@ class F110Simulator:
         adjustment for collision checks when the pose is at the center of gravity.
         """
         num_beams = simulator.num_beams
-        angles = np.zeros(num_beams, dtype=np.float32)
-        cosines = np.zeros(num_beams, dtype=np.float32)
-        side_distances = np.zeros(num_beams, dtype=np.float32)
 
         half_length = float(vehicle_params.length) / 2.0
         half_width = float(vehicle_params.width) / 2.0
@@ -355,7 +351,6 @@ class F110Simulator:
         angle_min = simulator.angle_min
 
         beam_angles = (angle_min + np.arange(num_beams, dtype=np.float64) * increment).astype(np.float32)
-        cosines = np.cos(beam_angles).astype(np.float32)
         ray_angles = beam_angles + lidar_dtheta
         dir_cos = np.cos(ray_angles)
         dir_sin = np.sin(ray_angles)
@@ -365,7 +360,7 @@ class F110Simulator:
             half_length, half_width,
         ).astype(np.float32)
 
-        return ScanCache(angles=beam_angles, cosines=cosines, side_distances=side_distances)
+        return ScanCache(angles=beam_angles, side_distances=side_distances)
 
 
     def _lidar_pose_from_base(self, pose: np.ndarray) -> np.ndarray:
@@ -558,14 +553,11 @@ class F110Simulator:
             scan_clean = simulator.scan(scan_pose, rng=None)
             cache = self.scan_cache[agent_idx]
 
-            # Wall collision: TTC on the wall-only scan (skipped when collisions disabled)
-            if wall_collision_enabled and check_ttc_jit(
+            # Wall collision: contact check on the wall-only scan (skipped when collisions disabled)
+            if wall_collision_enabled and check_collision(
                 scan_clean,
-                self.state.standard_state[agent_idx, 3],
-                cache.angles,
-                cache.cosines,
                 cache.side_distances,
-                self.ttc_threshold,
+                self.collision_margin,
             ):
                 self._halt_on_collision(agent_idx)
             else:
@@ -603,13 +595,10 @@ class F110Simulator:
                 if self.state.collisions[agent_idx]:
                     continue  # already in wall collision
                 cache = self.scan_cache[agent_idx]
-                if check_ttc_jit(
+                if check_collision(
                     self._adjusted_scans[agent_idx],
-                    self.state.standard_state[agent_idx, 3],
-                    cache.angles,
-                    cache.cosines,
                     cache.side_distances,
-                    self.ttc_threshold,
+                    self.collision_margin,
                 ):
                     self._halt_on_collision(agent_idx)
         else:

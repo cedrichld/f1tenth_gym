@@ -186,17 +186,17 @@ The scan answers both *"what does the car see?"* and *"did it crash?"*.
 [`_update_scans`](f1tenth_gym/envs/simulator.py#L506) per step:
 1. Precompute all agents' collision-body vertices into `self._all_vertices` (`:508-516`).
 2. Per agent: `_lidar_pose_from_base(pose)` → noise-free `ScanSimulator2D.scan` (`:523`) → sphere-trace beams through the map's **EDT** (`resolution * distance_transform_edt`, metres).
-3. **WALL check**: `check_ttc_jit(scan_clean, ...)` (`:527-538`). On hit: `state[i, 3:] = 0.0`, `collisions[i] = 1.0`.
+3. **WALL check**: `check_collision(scan_clean, ...)` (`:527-538`). On hit: `state[i, 3:] = 0.0`, `collisions[i] = 1.0`.
 4. `adjusted_scan = scan_clean` — **an ALIAS, no copy** (`:542`) — then `ray_cast` shortens beams hitting each opponent (`:543-546`). **`ray_cast` mutates its scan argument in place** ([laser_models.py:421-422](f1tenth_gym/envs/lidar/laser_models.py#L421)) — verified.
 5. Gaussian noise + clip → `state.scans[i]` (`:550-555`). **Noise is applied only to the observation, never to the collision path.**
 
 **Beam angles are quantised to a 2000-entry LUT.** `trace_ray` never uses the beam angle directly — it indexes `sines`/`cosines` built from `np.linspace(0, 2π, theta_dis=2000)` with a truncated `int(theta_index)` ([laser_models.py:146-149](f1tenth_gym/envs/lidar/laser_models.py#L146), `:214-247`, `:488-490`), so every ray snaps to a **0.00314 rad grid** — up to ~72% of the default 0.00437 rad `angle_increment` (1080 beams / 270°). `theta_dis` is a hardcoded `ScanSimulator2D.__init__` default, **unreachable from `LiDARConfig`**, so raising `num_beams` past ~2000 buys no angular resolution. The collision path (`cache.angles`, `ray_cast`) uses *exact* float angles and therefore disagrees with the scan. This is why [test_scan_sim.py](tests/test_scan_sim.py) can only assert `mse < 2.0`.
 
-**`check_ttc_jit` does not compute TTC.** The iTTC math is commented out ([laser_models.py:269-283](f1tenth_gym/envs/lidar/laser_models.py#L269)); the live body is `np.any(scan - side_distances <= ttc_thresh)`. So `F110Simulator.ttc_threshold = 0.005` is a **distance margin in metres, not a time**, collision is velocity-independent, and `vel`/`cosines` are dead parameters.
+**The collision check is a contact/distance check, not TTC** (renamed `check_collision` → **`check_collision(scan, side_distances, margin)`** in [laser_models.py](f1tenth_gym/envs/lidar/laser_models.py); the dead iTTC math and `vel`/`cosines`/`scan_angles` params were removed). Live body: `np.any(scan - side_distances <= margin)`. `F110Simulator.collision_margin = 0.005` is a **distance margin in metres, not a time** — velocity-independent. (`ScanCache.cosines` was dropped as it only fed the old check.)
 
 | `CollisionCheckMode` | Agent-vs-agent | Wall | Symmetry |
 |---|---|---|---|
-| `LIDAR_SCAN`=1 (default) | `check_ttc_jit` on opponent-shortened scan | scan check | **asymmetric** — A can flag while B doesn't |
+| `LIDAR_SCAN`=1 (default) | `check_collision` on opponent-shortened scan | scan check | **asymmetric** — A can flag while B doesn't |
 | `BOUNDING_BOX`=2 | O(n²) GJK over all i<j pairs | **still the scan check** (misnomer) | symmetric — both bodies flagged |
 
 `get_vertices` returns corners ordered `[rear-left, rear-right, front-right, front-left]` — `ray_cast` depends on this winding ([collision_models.py:278-280](f1tenth_gym/envs/collision_models.py#L278)).
@@ -259,7 +259,7 @@ Lint is a **separate** workflow ([lint.yml:44](.github/workflows/lint.yml#L44)):
 
 **Ordering contracts (none are documented in the code):**
 1. `get_initial_state` must run before any `state_dim`/`control_dim` read — they're side-effect attrs on a global IntEnum ([simulator.py:97](f1tenth_gym/envs/simulator.py#L97) → `:99`).
-2. **Wall `check_ttc_jit` MUST precede the `ray_cast` loop** (`:527` before `:543-546`). `ray_cast` mutates the aliased `scan_clean` in place — **verified**. Reordering silently turns every close overtake into a wall crash.
+2. **Wall `check_collision` MUST precede the `ray_cast` loop** (`:527` before `:543-546`). `ray_cast` mutates the aliased `scan_clean` in place — **verified**. Reordering silently turns every close overtake into a wall crash.
 3. `_update_scans` must precede `_update_agent_collisions` — currently *broken* when LiDAR is disabled (below).
 4. `_check_done` must precede `observe()` ([f110_env.py:301](f1tenth_gym/envs/f110_env.py#L301) before `:304`) because `observe` reads the env's live lap arrays.
 

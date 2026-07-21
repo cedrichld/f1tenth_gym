@@ -250,37 +250,28 @@ def get_scan(
 
 
 @njit(cache=True, error_model="numpy")
-def check_ttc_jit(scan, vel, scan_angles, cosines, side_distances, ttc_thresh):
-    """
-    Checks the iTTC of each beam in a scan for collision with environment
+def check_collision(scan, side_distances, margin):
+    """Contact/distance collision check against a wall-only LiDAR scan.
+
+    A beam registers a collision when the obstacle it hits is within ``margin``
+    metres of the vehicle's bounding-box edge along that beam
+    (``scan - side_distances <= margin``). ``side_distances`` is the distance
+    from the LiDAR to the car's side at each beam angle.
+
+    NOTE: this is a **distance margin**, not a time-to-collision -- it is
+    velocity-independent. (An earlier version had a commented-out iTTC branch;
+    it was never used and has been removed.)
 
     Args:
-        scan (np.ndarray(num_beams, )): current scan to check
-        vel (float): current velocity
-        scan_angles (np.ndarray(num_beams, )): precomped angles of each beam
-        cosines (np.ndarray(num_beams, )): precomped cosines of the scan angles
-        side_distances (np.ndarray(num_beams, )): precomped distances at each beam from the laser to the sides of the car
-        ttc_thresh (float): threshold for iTTC for collision
+        scan (np.ndarray(num_beams, )): current (noise-free) scan to check.
+        side_distances (np.ndarray(num_beams, )): per-beam distance from the
+            laser to the side of the car.
+        margin (float): collision distance margin in metres.
 
     Returns:
-        in_collision (bool): whether vehicle is in collision with environment
-        collision_angle (float): at which angle the collision happened
+        bool: whether the vehicle is in contact with the environment.
     """
-    ttc = scan - side_distances
-    in_collision = np.any(ttc <= ttc_thresh)
-    # in_collision = False
-    # if vel != 0.0:
-    #     num_beams = scan.shape[0]
-    #     for i in range(num_beams):
-    #         proj_vel = vel * cosines[i]
-    #         ttc = (scan[i] - side_distances[i]) / proj_vel
-    #         if (ttc < ttc_thresh) and (ttc >= 0.0):
-    #             in_collision = True
-    #             break
-    # else:
-    #     in_collision = False
-
-    return in_collision
+    return np.any(scan - side_distances <= margin)
 
 
 @njit(cache=True)
