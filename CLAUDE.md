@@ -316,7 +316,7 @@ Lint is a **separate** workflow ([lint.yml:44](.github/workflows/lint.yml#L44)):
 | Backwards laps don't decrement — `int()` truncation + a `>` guard make `lap_counts` monotonically non-decreasing | [f110_env.py:272-273](f1tenth_gym/envs/f110_env.py#L272) |
 | `examples/random_trackgen.py` imports **shapely**, which is declared nowhere (not in pyproject, not in uv.lock) | [examples/random_trackgen.py:37-39](examples/random_trackgen.py#L37) |
 | Same footgun, worse: `examples/video_recording.py` wraps in `gymnasium.wrappers.RecordVideo`, which hard-requires **moviepy** (`gym.error.DependencyNotInstalled` without it) — declared nowhere, **and `uv sync` actively uninstalls it**. Re-run `uv pip install moviepy` after any sync | [examples/video_recording.py:29](examples/video_recording.py#L29) |
-| `PurePursuitPlanner`'s `max_reacquire` branch **crashes** (`numba TypingError: dot(float32, float64)` + a length-2 array indexed at `[2]`). Reachable whenever the car drifts >tlad off the raceline but <20 m | [examples/waypoint_follow.py:276-278](examples/waypoint_follow.py#L276) |
+| ~~`PurePursuitPlanner`'s `max_reacquire` branch **crashes**~~ **(FIXED)** — the reacquire branch returned a length-2 float64 point (no speed), crashing `get_actuation`'s `[2]` index and the njit `dot(float32,float64)`; now returns the full `(x,y,speed)` row as float32 | [examples/waypoint_follow.py](examples/waypoint_follow.py) `_get_current_waypoint` |
 
 **Dead code / dead fields** (don't be fooled): `SimulationState.lap_counts/.lap_times/.lap_time_last_finish` are allocated, zeroed, and **never read or written** — the env keeps its own parallel float64 arrays. `F110Simulator._ray_to_rect_distance` (scalar, 60 lines) has no callers. `laser_models.py:575-690` is a broken in-module unittest block.
 
@@ -352,4 +352,4 @@ Everything is `IntEnum` + hardcoded `if/elif` dispatch. **There is no registry**
 - **`tests/legacy_scan_gen.py`** — STALE and unrunnable: calls the retired `"f110_gym:f110-v0"` id and the pre-fork flat obs layout. The only surviving reference to the dead package name in live source.
 - **`origin/main`** — a legacy `gym/f110_gym/` + setup.py tree. A different package. Do not read it for context.
 
-Repo hygiene nits (no runtime effect): `uv.lock` and `video_*/` are untracked and unignored; `pyproject.toml` `testpaths` lists a non-existent `integration/` dir (pytest drops it silently); [waypoint_follow.py:352](examples/waypoint_follow.py#L352) has a pasted LLM prompt as a trailing comment.
+Repo hygiene nits (no runtime effect): `uv.lock` and `video_*/` are untracked and unignored; `pyproject.toml` `testpaths` lists a non-existent `integration/` dir (pytest drops it silently). ([waypoint_follow.py](examples/waypoint_follow.py) is now the canonical fully-spelled-out `EnvConfig` reference — every field set explicitly to its default via `build_config()`.)
