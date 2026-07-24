@@ -1,3 +1,14 @@
+"""Pure-pursuit waypoint follower AND a fully-spelled-out configuration reference.
+
+Every field of ``EnvConfig`` and all of its nested config dataclasses is set
+explicitly in ``main()`` -- mostly to its *default* value -- so this file
+doubles as a live catalogue of every knob and what it defaults to. Where a value
+must deviate from the default for the follower to work (e.g. the observation
+type), the deviation is flagged with a ``# default: ...`` comment.
+
+Rendering needs an X display (real or ``xvfb``); set ``render_enabled=False`` in
+the config below to run fully headless.
+"""
 import time
 from typing import Tuple
 
@@ -6,15 +17,26 @@ import numpy as np
 from numba import njit
 
 from f1tenth_gym.envs.integrators import IntegratorType
-from f1tenth_gym.envs.dynamic_models import DynamicModel, F1TENTH_VEHICLE_PARAMETERS
+from f1tenth_gym.envs.dynamic_models import (
+    DynamicModel,
+    F1TENTH_VEHICLE_PARAMETERS,
+)
 from f1tenth_gym.envs.observation import ObservationType
 from f1tenth_gym.envs.reset import ResetStrategy
+from f1tenth_gym.envs.action import LongitudinalActionType, SteerActionType
+from f1tenth_gym.envs.collision_models import CollisionCheckMode
 from f1tenth_gym.envs.env_config import (
     ControlConfig,
+    DomainRandomizationConfig,
     EnvConfig,
+    LoopCounterMode,
     ObservationConfig,
+    RenderConfig,
     ResetConfig,
+    RewardConfig,
+    RewardMode,
     SimulationConfig,
+    TerminationConfig,
 )
 from f1tenth_gym.envs.lidar import LiDARConfig
 from f1tenth_gym.envs.rendering import make_lidar_scan_callback
@@ -274,8 +296,9 @@ class PurePursuitPlanner:
             current_waypoint[2] = waypoints[i, -1]
             return current_waypoint, i
         elif nearest_dist < self.max_reacquire:
-            # NOTE: specify type or numba complains
-            return wpts[i, :], i
+            # return the full (x, y, speed) row as float32: get_actuation needs
+            # index [2] (speed), and the njit dot needs a consistent dtype.
+            return waypoints[i, :].astype(np.float32), i
         else:
             return None, None
 
@@ -307,94 +330,200 @@ class PurePursuitPlanner:
 
         return speed, steering_angle
 
-def main():
-    """
-    main entry point
-    """
+def build_config() -> EnvConfig:
+    """Build a *fully-explicit* EnvConfig.
 
-    work = {
-        "mass": 3.463388126201571,
-        "lf": 0.15597534362552312,
-        "tlad": 0.82461887897713965 * 1.5,
-        "vgain": 1.,
-    }
-    num_agents = 1
-    cfg = EnvConfig(
-        map_name="Spielberg",
-        map_scale=1.0,
-        num_agents=num_agents,
-        control_config=ControlConfig(steer_delay_steps=1),
-        simulation_config=SimulationConfig(
-            timestep=0.01,
-            integrator_timestep=0.01,
-            integrator=IntegratorType.RK4,
-            dynamics_model=DynamicModel.KS,
-            compute_frenet_frame=False,
-            max_laps=5,
+    Every field of every config dataclass is listed below, almost all set to
+    their real default. This is the point of the file: a copy-paste template
+    where you can see every knob and its default at a glance, and flip only what
+    you need. ``EnvConfig()`` with no arguments produces the same thing (minus
+    the observation-type deviation noted below).
+    """
+    return EnvConfig(
+        # ---- top-level -----------------------------------------------------
+        seed=12345,                 # base RNG seed (LiDAR/DR/actuator-noise streams)
+        map_name="Spielberg",       # track name (downloaded on first use), a path,
+                                    #   or a Track instance
+        map_scale=1.0,              # >1 enlarges the track
+        num_agents=1,               # rows in the sim; >1 is multi-agent
+        ego_index=0,                # which agent is "ego" (0 <= ego_index < num_agents)
+        collision_check=CollisionCheckMode.LIDAR_SCAN,  # LIDAR_SCAN | BOUNDING_BOX | NONE
+        render_enabled=True,        # False -> no renderer built, runs fully headless
+
+        # Vehicle physical parameters. F1TENTH_VEHICLE_PARAMETERS is the default
+        # 1/10-scale preset; override individual fields with .with_updates(...).
+        # Key F1TENTH defaults (SI units):
+        #   m=3.74 (mass)   mu=1.0489 (friction)   I=0.04712 (yaw inertia)
+        #   lf=0.15875  lr=0.17145 (CoG->axle)     h=0.074 (CoG height)
+        #   s_min/s_max=-/+0.4189 (steer angle)    sv_min/sv_max=-/+3.2 (steer rate)
+        #   v_min=-5.0  v_max=20.0                  a_max=9.51   v_switch=7.319
+        #   width=0.31  length=0.58
+        params=F1TENTH_VEHICLE_PARAMETERS,
+        # e.g. params=F1TENTH_VEHICLE_PARAMETERS.with_updates(m=4.0, mu=0.9),
+
+        # ---- control: how the two action columns are interpreted -----------
+        control_config=ControlConfig(
+            longitudinal_mode=LongitudinalActionType.SPEED,   # SPEED | ACCL
+            steering_mode=SteerActionType.STEERING_ANGLE,     # STEERING_ANGLE | STEERING_SPEED
+            steer_delay_steps=0,    # steering-command ring-buffer lag (steps)
+            throttle_delay_steps=0, # longitudinal-command lag (steps)
+            steer_noise_std=0.0,    # Gaussian noise on the steer command (sim2real)
+            accl_noise_std=0.0,     # Gaussian noise on the longitudinal command
         ),
-        observation_config=ObservationConfig(type=ObservationType.KINEMATIC_STATE),
-        reset_config=ResetConfig(strategy=ResetStrategy.RL_RANDOM_STATIC),
-        # USE SICK TIM 571 CONFIGURATION (270° FOV)
+
+        # ---- physics -------------------------------------------------------
+        simulation_config=SimulationConfig(
+            timestep=0.01,                        # env step (s); must be a multiple
+            integrator_timestep=0.01,             #   of integrator_timestep
+            integrator=IntegratorType.RK4,        # RK4 | EULER
+            dynamics_model=DynamicModel.ST,       # ST (single-track) | KS | MB(broken)
+            loop_counter=LoopCounterMode.FRENET_BASED,  # FRENET_BASED | WINDING_ANGLE
+            compute_frenet_frame=True,            # needed for FRENET_BASED laps + frenet obs
+            max_laps=1,                           # None -> run forever
+        ),
+
+        # ---- observations --------------------------------------------------
+        # DEFAULT is ObservationType.DIRECT (scan + std_state + state + lap info).
+        # We use KINEMATIC_STATE so the follower can read pose_x/pose_y/pose_theta
+        # directly (DIRECT does not expose those derived fields -- see CLAUDE.md).
+        observation_config=ObservationConfig(
+            type=ObservationType.KINEMATIC_STATE,  # default: DIRECT
+            features=None,          # only used with type=FEATURES (a custom field tuple)
+        ),
+
+        # ---- reset / spawn -------------------------------------------------
+        reset_config=ResetConfig(
+            strategy=ResetStrategy.RL_GRID_STATIC,  # RL_{GRID,RANDOM}_{STATIC,RANDOM} | MAP_RANDOM_STATIC
+            min_dist=None,          # None -> strategy default (agent spacing, m)
+            max_dist=None,
+            shuffle=None,           # None -> strategy default (spawn-order shuffle)
+            move_laterally=None,    # None -> strategy default (lateral offset off line)
+        ),
+
+        # ---- LiDAR ---------------------------------------------------------
         lidar_config=LiDARConfig(
             enabled=True,
-            num_beams=819,
-            angle_min=np.deg2rad(-135.0),  # Convert degrees to radians
-            angle_max=np.deg2rad(135.0),   # Convert degrees to radians
-            range_max=25.0,
-            range_min=0.05,
-            noise_std=0.01,
-            base_link_to_lidar_tf=(0.275, 0.0, 0.0),
-        )
-    )
+            num_beams=1080,                 # ~2000 is the internal angular-LUT ceiling
+            field_of_view=4.712389,         # 270 deg. NOTE: only honoured on a FRESH
+                                            #   LiDARConfig; with_updates(field_of_view=)
+                                            #   does NOT re-derive the angles.
+            angle_min=None,                 # None -> -field_of_view/2
+            angle_max=None,                 # None -> +field_of_view/2
+            range_min=0.0,
+            range_max=30.0,
+            noise_std=0.01,                 # per-beam Gaussian range noise (obs only)
+            dropout_prob=0.0,               # per-beam no-return probability (sim2real)
+            range_bias_std=0.0,             # per-beam systematic bias, drawn once/episode
+            base_link_to_lidar_tf=(0.275, 0.0, 0.0),  # (x, y, yaw) sensor offset
+        ),
 
-    env = gym.make(
-        "f1tenth_gym:f1tenth-v0",
-        config=cfg,
-        render_mode="unlimited", # "human", "human_fast", "unlimited"I want to add visualization of the lidar scan visualization as a "point cloud" similar to how I would see a scan in rviz. Can we add a render callback built-into the gym that someone can add after creating the gym? See how render callbacks are added in waypoint follow. The render callback for the scan would then be initialized per instance of the f1tenth gym (so we can visually confirm scans are working)
-    )
-    track = env.unwrapped.track
+        # ---- rendering (pacing + visuals) ----------------------------------
+        render_config=RenderConfig(
+            render_fps=60,          # max redraws / wall-second (human) or frame cadence
+                                    #   in sim-time (rgb_array). Raise it to draw more often.
+            real_time_factor=1.0,   # sim-seconds per wall-second in human modes;
+                                    #   float("inf") = free-run. (render_mode="unlimited"
+                                    #   forces inf; "human_fast" forces 10.)
+            window_size=800,        # square pixel size (also the rgb_array/video size)
+            focus_on="agent_0",     # camera-follow target; None = whole-map view
+            vehicle_palette=(       # per-agent car colours, cycled by index
+                "#FD3754", "#377eb8", "#984ea3", "#e41a1c", "#ff7f00",
+                "#a65628", "#f781bf", "#888888", "#a6cee3", "#b2df8a",
+            ),
+            show_wheels=True,
+            render_map_img=True,    # draw the occupancy map underneath
+            car_thickness=1,
+            bigger_car_when_map_centered=True,
+            show_lap_info=True,     # overlay lap time / count
+        ),
 
-    planner = PurePursuitPlanner(
-        track=track,
-        wb=(
-            F1TENTH_VEHICLE_PARAMETERS.lf
-            + F1TENTH_VEHICLE_PARAMETERS.lr
+        # ---- termination / truncation --------------------------------------
+        termination_config=TerminationConfig(
+            max_episode_steps=None,      # None -> no step-based truncation
+            terminate_on_collision=True,
+            collision_agents="ego",      # "ego" | "any"
+        ),
+
+        # ---- reward --------------------------------------------------------
+        reward_config=RewardConfig(
+            mode=RewardMode.SURVIVAL,    # SURVIVAL (=timestep) | PROGRESS | CUSTOM
+            progress_weight=1.0,         # the weights below apply to PROGRESS only
+            velocity_weight=0.0,
+            timestep_weight=0.0,
+            collision_penalty=0.0,
+            reward_fn=None,              # required iff mode=CUSTOM:
+                                         #   (obs, action, info, terminated, truncated) -> float
+        ),
+
+        # ---- domain randomization (per-episode, at reset) ------------------
+        domain_randomization_config=DomainRandomizationConfig(
+            enabled=False,
+            # ABSOLUTE (low, high) ranges keyed by VehicleParameters field name:
+            param_ranges={},             # e.g. {"m": (3.0, 4.0), "mu": (0.9, 1.1)}
         ),
     )
 
-    track.raceline.render_waypoints(env.unwrapped.renderer)
-    for r in planner.get_render_callbacks():
-        env.unwrapped.add_render_callback(r)
-    
-    # Add lidar scan visualization
-    lidar_callback = make_lidar_scan_callback("agent_0", cfg.lidar_config, color=(255, 0, 0), size=2)
-    env.unwrapped.add_render_callback(lidar_callback)
 
-    frenet_start = np.array(env.unwrapped.track.frenet_to_cartesian(0.0, 0, 0))
-    frenet_start2 = np.array(env.unwrapped.track.frenet_to_cartesian(10, 0, 0))
-    init_poses = np.array([frenet_start, frenet_start2])
-    obs, info = env.reset(options={'poses':init_poses[:num_agents]})
-    done = False
+def main():
+    """Run the pure-pursuit follower on the fully-specified config above."""
+    # Pure-pursuit tuning (planner-side, not part of the env config):
+    #   tlad  = lookahead distance [m];  vgain = speed scaling of the raceline profile
+    tlad = 0.82461887897713965 * 1.5
+    vgain = 1.0
+
+    cfg = build_config()
+
+    # render_mode picks the initial pacing (overrides render_config.real_time_factor):
+    #   "human"      -> real time (rtf from render_config, default 1.0)
+    #   "human_fast" -> 10x real time
+    #   "unlimited"  -> free-run: RTF as fast as the CPU allows (rtf = inf)
+    #   "rgb_array"  -> returns frames, never sleeps (for RecordVideo)
+    # Redraws are still capped at render_config.render_fps in every human mode.
+    env = gym.make("f1tenth_gym:f1tenth-v0", config=cfg, render_mode="human")
+
+    track = env.unwrapped.track
+    planner = PurePursuitPlanner(
+        track=track,
+        wb=F1TENTH_VEHICLE_PARAMETERS.lf + F1TENTH_VEHICLE_PARAMETERS.lr,
+    )
+
+    # Render callbacks are per-env-instance; only wire them up when a renderer
+    # exists (render_enabled=True and a display is available).
+    renderer = env.unwrapped.renderer
+    if renderer is not None:
+        track.raceline.render_waypoints(renderer)
+        for r in planner.get_render_callbacks():
+            env.unwrapped.add_render_callback(r)
+        # LiDAR scan drawn as an rviz-style point cloud, to confirm scans work.
+        env.unwrapped.add_render_callback(
+            make_lidar_scan_callback("agent_0", cfg.lidar_config, color=(255, 0, 0), size=2)
+        )
+
+    obs, info = env.reset(seed=cfg.seed)  # or reset(options={"poses": (n,3)}) / {"states": ...}
     env.render()
 
     laptime = 0.0
+    done = False
     start = time.time()
     while not done:
-        action = env.action_space.sample()
+        action = np.zeros((cfg.num_agents, 2), dtype=np.float32)  # [[steer, speed], ...]
         for i, agent_id in enumerate(obs.keys()):
             speed, steer = planner.plan(
                 obs[agent_id]["pose_x"],
                 obs[agent_id]["pose_y"],
                 obs[agent_id]["pose_theta"],
-                work["tlad"],
-                work["vgain"],
+                tlad,
+                vgain,
             )
-            action[i] = np.array([steer, speed])
-        obs, step_reward, done, truncated, info = env.step(action)
+            action[i] = (steer, speed)          # steering FIRST, then longitudinal
+        obs, step_reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
         laptime += step_reward
         env.render()
 
     print("Sim elapsed time:", laptime, "Real elapsed time:", time.time() - start)
+    env.close()
+
 
 if __name__ == "__main__":
     main()
