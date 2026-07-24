@@ -258,6 +258,17 @@ Scope boundary: **the gym stays simulation-only with clean interfaces.** No plan
 
 ---
 
+## Performance profile
+
+Measured single-agent, ST + 1080-beam LiDAR + Frenet, render off (24-core box):
+- **`import f1tenth_gym` ≈ 770 ms, one-time** — mostly numba's own import.
+- **`gym.make` ≈ 190 ms.** Was dominated by the scipy Euclidean distance transform (EDT) of the occupancy map for LiDAR sphere-tracing. That EDT is now **computed once per track and shared across agents** (cached on the `Track` as `_lidar_dt`; the redundant post-construction `sim.set_map` was removed) — so init **no longer scales with `num_agents`** (4-agent make: ~1065 ms → ~176 ms). If you regress this, watch for `ScanSimulator2D.set_map` recomputing `get_dt`.
+- **First `step()` ≈ 27 ms with a warm numba disk cache** (`@njit(cache=True)`); on a *fresh* machine the first step JIT-compiles every kernel and takes seconds — a one-time cost, not a leak.
+- **Warm `step()` ≈ 0.23 ms (≈ 43× real-time at dt=0.01).** Breakdown: ~65 % LiDAR sphere-trace (njit, scales with `num_beams` — drop beams if you don't need them), ~22 % `cartesian_to_frenet` (**pure-Python scipy spline eval**, ~6 `asarray` calls/step — the one remaining non-jitted hot path; disable via `compute_frenet_frame=False` + a non-Frenet `loop_counter` if unused), ~6 % RK4. Scales ~linearly, ~0.2 ms/agent.
+- **Rendering** (xvfb): rgb_array GPU grab ≈ 2.24 ms (~450 fps ceiling); the `render_obs` deepcopy adds ~0.02 ms/step; human-mode `render()` wall time is the intended real-time pacing sleep, not draw cost.
+
+---
+
 ## Testing & dev workflow
 
 24 test modules, ~200 test functions, all plain `unittest.TestCase`. **No `conftest.py`, no fixtures anywhere.** `pytest` config is [pyproject.toml:50-56](pyproject.toml#L50) (`addopts="-ra"`, `testpaths=["tests","integration"]`). One pre-existing failure is unrelated to this work: deselect `tests/test_track.py::TestTrack::test_map_dir_structure` (stale map-cache assertion). Full green run: **200 passed, 1 deselected**.
