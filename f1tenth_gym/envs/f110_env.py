@@ -187,6 +187,7 @@ class F110Env(gym.Env):
         self.render_cfg = cfg.render_config
         self.termination_cfg = cfg.termination_config
         self.reward_cfg = cfg.reward_config
+        self.dr_cfg = cfg.domain_randomization_config
 
         self.max_episode_steps = self.termination_cfg.max_episode_steps
         self.terminate_on_collision = self.termination_cfg.terminate_on_collision
@@ -399,6 +400,14 @@ class F110Env(gym.Env):
             terminated = terminated or (self.lap_counts[self.ego_idx] >= self.max_laps)
         return terminated
 
+    def _sample_vehicle_params(self):
+        """Draw a randomized VehicleParameters from the DR ranges (env RNG)."""
+        changes = {
+            name: float(self.np_random.uniform(lo, hi))
+            for name, (lo, hi) in self.dr_cfg.param_ranges.items()
+        }
+        return self.vehicle_params.with_updates(**changes)
+
     def _compute_progress(self) -> np.ndarray:
         """Per-agent forward Frenet arclength progress (metres) since the last
         step, wrap-corrected. Zeros when the Frenet frame is not computed."""
@@ -541,6 +550,12 @@ class F110Env(gym.Env):
             ), f"Initial full state must be a numpy array of shape (num_agents, {self.model.state_dim})"
         else:
             raise ValueError("Invalid reset option.")
+
+        # Domain randomization: sample vehicle params for this episode (from the
+        # env RNG, so it is reproducible with reset(seed=...)) and push them to
+        # the sim (rebuilds params array + scan/collision caches).
+        if self.dr_cfg.enabled and self.dr_cfg.param_ranges:
+            self.sim.update_params(self._sample_vehicle_params())
 
         # Derive the LiDAR-noise seed from the env RNG (which gymnasium seeds
         # from reset(seed=...)), so the noise stream is controlled by the reset

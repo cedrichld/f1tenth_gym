@@ -1,7 +1,7 @@
 """Typed configuration structures for the simplified F1TENTH gym environment."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from enum import IntEnum
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -325,6 +325,48 @@ class RewardConfig:
 
 
 @dataclass(frozen=True)
+class DomainRandomizationConfig:
+    """Per-episode randomization of vehicle parameters, applied at ``reset()``.
+
+    ``param_ranges`` maps a ``VehicleParameters`` field name to an ABSOLUTE
+    ``(low, high)`` range in physical units; each listed param is sampled
+    uniformly at every reset from the env RNG (so it is reproducible with
+    ``reset(seed=...)``). Only listed params are randomized. Example::
+
+        DomainRandomizationConfig(enabled=True, param_ranges={
+            "mass": (3.0, 4.0), "mu": (0.9, 1.1), "lf": (0.14, 0.18),
+        })
+
+    Note: prefer randomizing *dynamics* params (mass, mu, lf, lr, I, h_cg).
+    Randomizing the actuation limits (v_min/v_max/s_min/s_max/...) is allowed
+    but desyncs the fixed action/observation spaces, so it is not recommended.
+
+    Attributes:
+        enabled: Whether to randomize at each reset.
+        param_ranges: ``{param_name: (low, high)}`` absolute ranges.
+    """
+
+    enabled: bool = False
+    param_ranges: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        valid = {f.name for f in fields(VehicleParameters)}
+        for name, rng in self.param_ranges.items():
+            if name not in valid:
+                raise ValueError(
+                    f"unknown vehicle parameter {name!r} in param_ranges "
+                    f"(must be a VehicleParameters field)"
+                )
+            if len(rng) != 2 or float(rng[0]) > float(rng[1]):
+                raise ValueError(
+                    f"param_ranges[{name!r}] must be (low, high) with low <= high, got {rng!r}"
+                )
+
+    def with_updates(self, **changes: Any) -> "DomainRandomizationConfig":
+        return replace(self, **changes)
+
+
+@dataclass(frozen=True)
 class EnvConfig:
     """Main configuration for the F1TENTH environment.
 
@@ -343,6 +385,7 @@ class EnvConfig:
         render_config: Rendering pacing / frame-output configuration.
         termination_config: Episode termination / truncation configuration.
         reward_config: Per-step reward configuration.
+        domain_randomization_config: Per-episode vehicle-param randomization.
         collision_check: Collision detection mode.
         render_enabled: Whether rendering is enabled.
     """
@@ -361,6 +404,9 @@ class EnvConfig:
     render_config: RenderConfig = field(default_factory=RenderConfig)
     termination_config: TerminationConfig = field(default_factory=TerminationConfig)
     reward_config: RewardConfig = field(default_factory=RewardConfig)
+    domain_randomization_config: DomainRandomizationConfig = field(
+        default_factory=DomainRandomizationConfig
+    )
     collision_check: CollisionCheckMode = CollisionCheckMode.LIDAR_SCAN
     render_enabled: bool = True
 
@@ -421,6 +467,10 @@ class EnvConfig:
                 "simulation_config.compute_frenet_frame=True"
             )
 
+        dr_cfg = self.domain_randomization_config
+        if not isinstance(dr_cfg, DomainRandomizationConfig):
+            raise TypeError("domain_randomization must be a DomainRandomizationConfig instance")
+
         if (
             simulation_cfg.loop_counter is LoopCounterMode.FRENET_BASED
             and not simulation_cfg.compute_frenet_frame
@@ -435,6 +485,7 @@ class EnvConfig:
         object.__setattr__(self, "render_config", render_cfg)
         object.__setattr__(self, "termination_config", termination_cfg)
         object.__setattr__(self, "reward_config", reward_cfg)
+        object.__setattr__(self, "domain_randomization_config", dr_cfg)
 
     def with_updates(self, **changes: Any) -> "EnvConfig":
         return replace(self, **changes)
