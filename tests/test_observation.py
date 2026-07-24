@@ -207,3 +207,52 @@ class TestFiniteObsBounds(unittest.TestCase):
                 if term or trunc:
                     obs, _ = env.reset()
             env.close()
+
+    def _rollout_in_space(self, obstype, action_fn, steps=300, seed=3):
+        import numpy as _np
+        from f1tenth_gym.envs.env_config import SimulationConfig
+        env = gym.make(
+            "f1tenth_gym:f1tenth-v0",
+            config=EnvConfig(
+                observation_config=ObservationConfig(type=obstype),
+                simulation_config=SimulationConfig(max_laps=None),
+                render_enabled=False,
+            ),
+        )
+        sp = env.observation_space["agent_0"]
+        obs, _ = env.reset(seed=seed)
+        mags = []
+        for t in range(steps):
+            obs, _, term, trunc, _ = env.step(action_fn(t))
+            if "linear_vel_magnitude" in obs["agent_0"]:
+                mags.append(float(obs["agent_0"]["linear_vel_magnitude"]))
+            for k, v in obs["agent_0"].items():
+                self.assertTrue(sp[k].contains(_np.asarray(v, _np.float32)),
+                                f"{obstype.name}: {k}={_np.asarray(v)} outside {sp[k]}")
+            if term or trunc:
+                obs, _ = env.reset()
+        env.close()
+        return mags
+
+    def test_reverse_keeps_magnitude_nonnegative_and_in_space(self):
+        # linear_vel_magnitude must be a true (non-negative) magnitude, not the
+        # signed speed -- else reversing puts it below its declared low of 0.
+        import numpy as _np
+        mags = self._rollout_in_space(
+            ObservationType.DYNAMIC_STATE,
+            lambda t: _np.array([[0.0, -5.0]], _np.float32),  # full reverse
+        )
+        self.assertTrue(all(m >= 0.0 for m in mags), "magnitude went negative")
+        self.assertGreater(max(mags), 1.0, "car never actually reversed")
+
+    def test_hard_steer_and_accel_stay_in_space(self):
+        # full-lock steering + max accel: the actuator constraints zero the rate
+        # only AFTER crossing the limit, so delta/speed overshoot by one step.
+        # The bounds must include that margin.
+        import numpy as _np
+        for ot in (ObservationType.DIRECT, ObservationType.DYNAMIC_STATE,
+                   ObservationType.KINEMATIC_STATE):
+            self._rollout_in_space(
+                ot,
+                lambda t: _np.array([[0.4189 if t % 2 else -0.4189, 20.0]], _np.float32),
+            )

@@ -78,6 +78,17 @@ class FullObservation(Observation):
         p = env.vehicle_params
         v_min, v_max = float(p.v_min), float(p.v_max)
         s_min, s_max = float(p.s_min), float(p.s_max)
+        # One-integrator-step actuator overshoot: the steering/accel constraints
+        # zero the actuator RATE only AFTER the angle/speed has crossed its limit,
+        # so a single step can exceed it by up to rate * integrator_dt. Pad the
+        # bounds by that worst case (|d delta/dt| <= sv_max, |dv/dt| <= a_max),
+        # else a hard-steer / hard-accel rollout lands just outside the declared
+        # space and breaks check_env / normalized-Box RL pipelines.
+        idt = float(getattr(env.sim, "integrator_dt", env.timestep))
+        s_min -= float(p.sv_max) * idt
+        s_max += float(p.sv_max) * idt
+        v_min -= float(p.a_max) * idt
+        v_max += float(p.a_max) * idt
         spd_hi = max(abs(v_min), abs(v_max))
         wheelbase = max(float(p.lf) + float(p.lr), 0.1)
         # kinematic max yaw rate = v*tan(steer)/wheelbase, with a safety factor
@@ -201,7 +212,10 @@ class FullObservation(Observation):
                     "pose_theta": np.asarray(std_state[4], dtype=np.float32),
                     "linear_vel_x": np.asarray(vx, dtype=np.float32),
                     "linear_vel_y": np.asarray(vy, dtype=np.float32),
-                    "linear_vel_magnitude": np.asarray(speed, dtype=np.float32),
+                    # true speed magnitude (non-negative): |speed| = hypot(vx, vy).
+                    # NOT the signed std_state[3], which would fall below the
+                    # field's declared [0, spd_hi] Box when the car reverses.
+                    "linear_vel_magnitude": np.asarray(np.hypot(vx, vy), dtype=np.float32),
                     "ang_vel_z": np.asarray(std_state[5], dtype=np.float32),
                     "delta": np.asarray(std_state[2], dtype=np.float32),
                     "beta": np.asarray(beta, dtype=np.float32),
