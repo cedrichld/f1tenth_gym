@@ -6,10 +6,13 @@ consumers). Use these to consume it from single-agent RL code.
 """
 from __future__ import annotations
 
+import copy
+from collections import deque
+
 import gymnasium as gym
 import numpy as np
 
-__all__ = ["SingleAgentWrapper"]
+__all__ = ["SingleAgentWrapper", "ObservationDelayWrapper"]
 
 
 class SingleAgentWrapper(gym.Wrapper, gym.utils.RecordConstructorArgs):
@@ -47,3 +50,39 @@ class SingleAgentWrapper(gym.Wrapper, gym.utils.RecordConstructorArgs):
         action = np.asarray(action, dtype=np.float32).reshape(1, -1)
         obs, reward, terminated, truncated, info = self.env.step(action)
         return obs[self._agent_id], reward, terminated, truncated, info
+
+
+class ObservationDelayWrapper(gym.Wrapper, gym.utils.RecordConstructorArgs):
+    """Delay the observation by a fixed number of steps (sensor/perception lag).
+
+    ``step`` returns the observation as it was ``delay_steps`` steps ago; reward,
+    termination, and ``info`` still reflect the true current state (only the
+    sensing the agent acts on is stale). During the initial ``delay_steps`` steps
+    -- before that much history exists -- the reset observation is repeated.
+
+    Works on any observation the env exposes (the native nested dict, or a flat
+    ``Box`` when composed after :class:`SingleAgentWrapper` /
+    ``FlattenObservation``); the observation space is unchanged. ``delay_steps=0``
+    is a passthrough.
+    """
+
+    def __init__(self, env: gym.Env, delay_steps: int = 1):
+        gym.utils.RecordConstructorArgs.__init__(self, delay_steps=delay_steps)
+        gym.Wrapper.__init__(self, env)
+        if delay_steps < 0:
+            raise ValueError(f"delay_steps must be >= 0, got {delay_steps}")
+        self._delay_steps = int(delay_steps)
+        # holds delay_steps+1 frames; the leftmost is delay_steps steps old
+        self._buffer: deque = deque(maxlen=self._delay_steps + 1)
+
+    def reset(self, *, seed=None, options=None):
+        obs, info = self.env.reset(seed=seed, options=options)
+        self._buffer.clear()
+        for _ in range(self._delay_steps + 1):
+            self._buffer.append(copy.deepcopy(obs))
+        return copy.deepcopy(self._buffer[0]), info
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        self._buffer.append(copy.deepcopy(obs))
+        return copy.deepcopy(self._buffer[0]), reward, terminated, truncated, info
