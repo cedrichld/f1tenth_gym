@@ -40,7 +40,7 @@ core stack is:
 * ``pyqtgraph`` and ``pyqt6`` — the OpenGL renderer
 * ``pyopengl`` / ``pyopengl-accelerate`` — GL backend
 * ``requests`` — map download
-* plus ``opencv-python``, ``pandas``, and ``yamldataclassconfig``
+* ``opencv-python`` — occupancy-map dilation and lap-info text overlay
 
 The development group (``pytest``, ``black``, ``isort``, ``autoflake``,
 ``flake8``, ``matplotlib``, ``ipykernel``) is installed automatically by

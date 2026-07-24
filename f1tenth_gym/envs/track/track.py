@@ -9,14 +9,13 @@ import numpy as np
 import yaml
 from PIL import Image
 from PIL.Image import Transpose
-from yamldataclassconfig.config import YamlDataClassConfig
 
 from . import Raceline
 from .cubic_spline import CubicSplineND
 from .utils import find_track_dir
 
 @dataclass
-class TrackSpec(YamlDataClassConfig):
+class TrackSpec:
     """Track specification loaded from YAML config file.
 
     Attributes:
