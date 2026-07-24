@@ -8,6 +8,9 @@ from typing import Optional
 import scipy.optimize as so
 from f1tenth_gym.envs.track.utils import nearest_point_on_trajectory
 
+# Cubic-polynomial exponents [3, 2, 1, 0], hoisted out of the per-eval hot path.
+_CUBIC_POW = np.arange(4)[::-1]
+
 class CubicSplineND:
     """
     Cubic CubicSplineND class.
@@ -62,15 +65,16 @@ class CubicSplineND:
         self.length = len(self.spline_x)
 
     def find_segment_for_s(self, x):
-        # Find the segment of the spline that x is in
-        # print(x, self.spline.x[-1], self.s_interval, len(self.spline_x))
-        return (x / (self.spline.x[-1] + self.s_interval) * (len(self.spline_x) - 1)).astype(int)
-        # return (x / (self.spline.x[-1]) * (len(self.spline_x) - 2)).astype(int)
-    
+        # Find the segment of the spline that x is in. Use the cached spline_x
+        # array, not the scipy `.x` property (which re-wraps via asarray on every
+        # access -- a hot-path cost in cartesian_to_frenet).
+        return (x / (self.spline_x[-1] + self.s_interval) * (len(self.spline_x) - 1)).astype(int)
+
     def predict_with_spline(self, point, segment, state_index=0):
-        # A (4, 100) array, where the rows contain (x-x[i])**3, (x-x[i])**2 etc.
-        # exp_x = (point - self.spline.x[[segment]])[None, :] ** np.arange(4)[::-1, None]
-        exp_x = ((point - self.spline.x[segment % self.length]) ** np.arange(4)[::-1])[:, None]
+        # Evaluate the cubic at `point` in the given segment. spline_x is the
+        # cached knot array (avoids the scipy `.x` property); _CUBIC_POW is the
+        # hoisted [3,2,1,0] exponent vector.
+        exp_x = ((point - self.spline_x[segment % self.length]) ** _CUBIC_POW)[:, None]
         vec = self.spline_c[:, segment % (self.length - 1), state_index]
         # Sum over the rows of exp_x weighted by coefficients in the ith column of s.c
         point = vec.dot(exp_x)
@@ -114,6 +118,19 @@ class CubicSplineND:
         d2y_dt2 = np.gradient(dy_dt, edge_order=2)
         curvature = (dx_dt * d2y_dt2 - d2x_dt2 * dy_dt) / (dx_dt * dx_dt + dy_dt * dy_dt)**1.5
         return curvature[2:-2]
+
+    def calc_position_and_yaw(self, s: float, segment=None):
+        """Evaluate x, y and yaw at ``s`` in a single polynomial evaluation.
+
+        Equivalent to ``calc_position(s, segment)`` plus ``calc_yaw(s, segment)``
+        but shares the one ``(s - knot)**power`` vector and does a single
+        matrix-vector product over channels [x, y, cos, sin] -- the hot path in
+        ``Track.cartesian_to_frenet`` (called once per agent per step).
+        """
+        segment = segment if segment is not None else self.find_segment_for_s(s)
+        exp_x = (s - self.spline_x[segment % self.length]) ** _CUBIC_POW
+        x, y, cos, sin = exp_x @ self.spline_c[:, segment % (self.length - 1), 0:4]
+        return x, y, np.arctan2(sin, cos)
 
     def calc_position(self, s: float, segment=None) -> np.ndarray:
         """

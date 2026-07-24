@@ -77,3 +77,23 @@ class TestCubicSpline(unittest.TestCase):
         self.assertAlmostEqual(
             track.calc_arclength(0, -1)[0], 3 * np.pi / 2, places=2
         )
+
+
+class TestCombinedEval(unittest.TestCase):
+    def test_calc_position_and_yaw_matches_separate(self):
+        """The fused position+yaw evaluation (hot path in cartesian_to_frenet)
+        must match calling calc_position and calc_yaw separately."""
+        t = np.linspace(0, 2 * np.pi, 120)[:-1]
+        # a non-circular closed loop so x/y/yaw all vary
+        spline = cubic_spline.CubicSplineND(
+            2.0 * np.cos(t) + 0.3 * np.cos(3 * t),
+            1.5 * np.sin(t),
+        )
+        for s in np.linspace(0.05, spline.s_frame_max - 0.05, 200):
+            s = float(s)
+            x0, y0 = spline.calc_position(s)
+            yaw0 = spline.calc_yaw(s)
+            x1, y1, yaw1 = spline.calc_position_and_yaw(s)
+            self.assertAlmostEqual(x0, x1, places=12)
+            self.assertAlmostEqual(y0, y1, places=12)
+            self.assertAlmostEqual(yaw0, yaw1, places=12)

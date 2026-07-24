@@ -495,10 +495,10 @@ class Track:
         self.s_guess = s
         segment = line.spline.find_segment_for_s(s)
 
-        # Use the normal to calculate the signed lateral deviation
-        yaw = line.spline.calc_yaw(s, segment)
+        # Use the normal to calculate the signed lateral deviation. Evaluate
+        # position and yaw in one shared polynomial evaluation (hot path).
+        x_eval, y_eval, yaw = line.spline.calc_position_and_yaw(s, segment)
         normal = np.asarray([-np.sin(yaw), np.cos(yaw)])
-        x_eval, y_eval = line.spline.calc_position(s, segment)
         dx = x - x_eval
         dy = y - y_eval
         distance_sign = np.sign(np.dot([dx, dy], normal))
