@@ -349,10 +349,12 @@ class DomainRandomizationConfig:
     ``reset(seed=...)``). Only listed params are randomized. Example::
 
         DomainRandomizationConfig(enabled=True, param_ranges={
-            "mass": (3.0, 4.0), "mu": (0.9, 1.1), "lf": (0.14, 0.18),
+            "m": (3.0, 4.0), "mu": (0.9, 1.1), "lf": (0.14, 0.18),
         })
 
-    Note: prefer randomizing *dynamics* params (mass, mu, lf, lr, I, h_cg).
+    Note: field names are the actual ``VehicleParameters`` fields, e.g. ``m``
+    (mass) and ``h`` (CoG height) -- not ``mass``/``h_cg``. Prefer randomizing
+    *dynamics* params (m, mu, lf, lr, I, h).
     Randomizing the actuation limits (v_min/v_max/s_min/s_max/...) is allowed
     but desyncs the fixed action/observation spaces, so it is not recommended.
 
