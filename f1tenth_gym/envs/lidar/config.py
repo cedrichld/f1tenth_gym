@@ -18,7 +18,15 @@ class LiDARConfig:
         range_min: Minimum range in meters, readings below are clipped.
         range_max: Maximum range in meters, readings above are clipped.
         noise_std: Standard deviation of Gaussian noise on range readings.
+        dropout_prob: Per-beam, per-step probability that a beam returns a
+            no-return (clamped to range_max), modelling missed detections.
+        range_bias_std: Std of a per-beam systematic range bias, drawn once per
+            episode (reproducible with reset(seed=...)), modelling calibration
+            error. Constant across a rollout, unlike noise_std.
         base_link_to_lidar_tf: (x, y, yaw) offset from base_link in meters/radians.
+
+    All of the above affect the *observed* scan only; collision detection uses
+    the clean scan.
     """
 
     enabled: bool = True
@@ -29,6 +37,8 @@ class LiDARConfig:
     range_min: float = 0.0
     range_max: float = 30.0
     noise_std: float = 0.01
+    dropout_prob: float = 0.0
+    range_bias_std: float = 0.0
     # (x, y, yaw) offset from base_link in meters/radians.
     base_link_to_lidar_tf: tuple[float, float, float] = (0.275, 0.0, 0.0)
 
@@ -54,6 +64,10 @@ class LiDARConfig:
             )
         if self.noise_std < 0:
             raise ValueError(f"noise_std must be >= 0, got {self.noise_std}")
+        if not (0.0 <= self.dropout_prob <= 1.0):
+            raise ValueError(f"dropout_prob must be in [0, 1], got {self.dropout_prob}")
+        if self.range_bias_std < 0:
+            raise ValueError(f"range_bias_std must be >= 0, got {self.range_bias_std}")
         if self.angle_min >= self.angle_max:
             raise ValueError(
                 f"angle_min ({self.angle_min}) must be less than angle_max ({self.angle_max})"

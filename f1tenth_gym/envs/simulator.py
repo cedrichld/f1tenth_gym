@@ -113,6 +113,8 @@ class F110Simulator:
         self.scan_sims: list[ScanSimulator2D] = []
         self.scan_rngs: list[np.random.Generator] = []
         self.scan_cache: list[ScanCache] = []
+        # per-agent, per-beam systematic range bias (drawn per episode at reset)
+        self.scan_bias = np.zeros((self.num_agents, env_config.lidar_config.num_beams), dtype=np.float32)
         if self.scan_enabled:
             lidar_cfg = env_config.lidar_config
             for agent_index in range(self.num_agents):
@@ -193,8 +195,16 @@ class F110Simulator:
         self.state.reset()
         if self.scan_enabled:
             base_seed = self.seed if noise_seed is None else int(noise_seed)
+            bias_std = self.config.lidar_config.range_bias_std
             for idx in range(self.num_agents):
                 self.scan_rngs[idx] = np.random.default_rng(base_seed + idx)
+                # per-episode per-beam systematic bias (constant across the rollout)
+                if bias_std > 0.0:
+                    self.scan_bias[idx] = self.scan_rngs[idx].normal(
+                        0.0, bias_std, size=self.scan_bias.shape[1]
+                    ).astype(np.float32)
+                else:
+                    self.scan_bias[idx] = 0.0
         for i in range(self.num_agents):
             if option == "pose":
                 self.state.state[i] = self.model.get_initial_state(
@@ -572,13 +582,19 @@ class F110Simulator:
                 adjusted_scan = ray_cast(origin, adjusted_scan, cache.angles, all_vertices[opp_idx])
             self._adjusted_scans[agent_idx] = adjusted_scan
 
-            # Add noise for observation output only
-            noisy_scan = adjusted_scan + self.scan_rngs[agent_idx].normal(
-                0.0, simulator.std_dev, size=simulator.num_beams
-            )
-            self.state.scans[agent_idx] = np.clip(
-                noisy_scan, simulator.min_range, simulator.max_range
-            ).astype(np.float32)
+            # Sensor noise, applied to the OBSERVED scan only (collisions use the
+            # clean scan): Gaussian range noise + per-beam systematic bias, then
+            # random per-beam dropout (no-return -> max_range).
+            rng = self.scan_rngs[agent_idx]
+            lidar_cfg = self.config.lidar_config
+            noisy_scan = adjusted_scan + rng.normal(0.0, simulator.std_dev, size=simulator.num_beams)
+            if lidar_cfg.range_bias_std > 0.0:
+                noisy_scan = noisy_scan + self.scan_bias[agent_idx]
+            noisy_scan = np.clip(noisy_scan, simulator.min_range, simulator.max_range)
+            if lidar_cfg.dropout_prob > 0.0:
+                dropped = rng.random(simulator.num_beams) < lidar_cfg.dropout_prob
+                noisy_scan[dropped] = simulator.max_range
+            self.state.scans[agent_idx] = noisy_scan.astype(np.float32)
 
     def _update_agent_collisions(self) -> None:
         """Detect agent-vs-agent collisions using the configured mode."""
