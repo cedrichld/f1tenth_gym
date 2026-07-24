@@ -510,8 +510,20 @@ class ScanSimulator2D(object):
         self.orig_s = np.sin(self.origin[2])
         self.orig_c = np.cos(self.origin[2])
 
-        # get the distance transform
-        self.dt = get_dt(self.map_img, self.map_resolution)
+        # get the distance transform. It is a pure function of (occupancy_map,
+        # resolution), which are identical for every agent's scan sim and across
+        # repeated set_map calls with the same track. The EDT is the single most
+        # expensive step of env init, so cache it on the shared Track to compute
+        # it once instead of once per agent (x2 with the old double set_map).
+        cached = getattr(self.track, "_lidar_dt", None)
+        if cached is not None and cached[0] == self.map_resolution:
+            self.dt = cached[1]
+        else:
+            self.dt = get_dt(self.map_img, self.map_resolution)
+            try:
+                self.track._lidar_dt = (self.map_resolution, self.dt)
+            except (AttributeError, TypeError):
+                pass  # exotic map object that can't hold the cache; just skip it
 
         return True
 

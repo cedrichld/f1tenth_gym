@@ -238,8 +238,8 @@ class F110Env(gym.Env):
             track=self.track,
             seed=self.seed,
         )
-        if isinstance(self.track, Track):
-            self.sim.set_map(self.track, self.map_scale)
+        # NOTE: F110Simulator.__init__ already sets the map from `track` above
+        # (and builds the scan cache from it), so no explicit set_map is needed.
 
         self.agent_ids = [f"agent_{i}" for i in range(self.num_agents)]
 

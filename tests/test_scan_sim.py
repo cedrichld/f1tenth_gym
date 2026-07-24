@@ -230,3 +230,31 @@ class LiDARIntegrationTests(unittest.TestCase):
         self.assertLessEqual(scan.max(), 10.0 + 0.001)
 
         env.close()
+
+
+class ScanEDTSharingTests(unittest.TestCase):
+    """The map distance-transform (EDT) is the dominant env-init cost; it must be
+    computed once per track and shared across all agents' scan sims, not
+    recomputed per agent (see set_map caching)."""
+
+    def test_edt_shared_across_agents(self):
+        from f1tenth_gym.envs.env_config import SimulationConfig
+        from f1tenth_gym.envs.lidar.laser_models import get_dt
+
+        env = gym.make(
+            "f1tenth_gym:f1tenth-v0",
+            config=EnvConfig(
+                num_agents=4,
+                simulation_config=SimulationConfig(max_laps=None),
+                render_enabled=False,
+            ),
+        )
+        sims = env.unwrapped.sim.scan_sims
+        self.assertEqual(len(sims), 4)
+        # every agent's scan sim points at the SAME dt array (one computation)
+        for s in sims[1:]:
+            self.assertIs(s.dt, sims[0].dt)
+        # and that shared array equals a freshly computed EDT (no corruption)
+        fresh = get_dt(sims[0].map_img, sims[0].map_resolution)
+        np.testing.assert_array_equal(sims[0].dt, fresh)
+        env.close()
