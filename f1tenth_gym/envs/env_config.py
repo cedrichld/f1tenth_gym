@@ -63,15 +63,30 @@ class ControlConfig:
         longitudinal_mode: How longitudinal control is interpreted (speed or acceleration).
         steering_mode: How steering control is interpreted (angle or angular velocity).
         steer_delay_steps: Number of timesteps to delay steering commands.
+        throttle_delay_steps: Number of timesteps to delay longitudinal commands
+            (models drivetrain/ESC lag; steering already had its own delay).
+        steer_noise_std: Std of Gaussian noise added to the steering command
+            each step (actuator/servo noise).
+        accl_noise_std: Std of Gaussian noise added to the longitudinal command
+            each step.
     """
 
     longitudinal_mode: LongitudinalActionType = LongitudinalActionType.SPEED
     steering_mode: SteerActionType = SteerActionType.STEERING_ANGLE
     steer_delay_steps: int = 0
+    throttle_delay_steps: int = 0
+    steer_noise_std: float = 0.0
+    accl_noise_std: float = 0.0
 
     def __post_init__(self) -> None:
         if self.steer_delay_steps < 0:
             raise ValueError(f"steer_delay_steps must be >= 0, got {self.steer_delay_steps}")
+        if self.throttle_delay_steps < 0:
+            raise ValueError(f"throttle_delay_steps must be >= 0, got {self.throttle_delay_steps}")
+        if self.steer_noise_std < 0:
+            raise ValueError(f"steer_noise_std must be >= 0, got {self.steer_noise_std}")
+        if self.accl_noise_std < 0:
+            raise ValueError(f"accl_noise_std must be >= 0, got {self.accl_noise_std}")
 
     def with_updates(self, **changes: Any) -> "ControlConfig":
         return replace(self, **changes)

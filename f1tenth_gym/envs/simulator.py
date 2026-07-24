@@ -105,6 +105,19 @@ class F110Simulator:
             delay_steps=env_config.control_config.steer_delay_steps,
         )
 
+        # actuation realism: command noise + longitudinal (throttle) delay
+        cc = env_config.control_config
+        self._steer_noise_std = float(cc.steer_noise_std)
+        self._accl_noise_std = float(cc.accl_noise_std)
+        self._throttle_delay_steps = int(cc.throttle_delay_steps)
+        self.control_rng = np.random.default_rng(seed)  # command-noise stream
+        if self._throttle_delay_steps > 0:
+            self._throttle_buffer = np.zeros((self.num_agents, self._throttle_delay_steps), dtype=np.float32)
+            self._throttle_head = np.zeros((self.num_agents,), dtype=np.int32)
+        else:
+            self._throttle_buffer = None
+            self._throttle_head = None
+
         # Static helpers
         self.standard_state_fn = self.model.get_standardized_state_fn()
         self.scan_enabled = env_config.lidar_config.enabled
@@ -193,8 +206,14 @@ class F110Simulator:
             raise ValueError("Number of poses does not match number of agents")
 
         self.state.reset()
+        base_seed = self.seed if noise_seed is None else int(noise_seed)
+        # command-noise stream, deterministic in the reset seed (offset well away
+        # from the per-agent scan seeds base_seed+idx)
+        self.control_rng = np.random.default_rng(base_seed + 2 ** 20)
+        if self._throttle_buffer is not None:
+            self._throttle_buffer.fill(0.0)
+            self._throttle_head.fill(0)
         if self.scan_enabled:
-            base_seed = self.seed if noise_seed is None else int(noise_seed)
             bias_std = self.config.lidar_config.range_bias_std
             for idx in range(self.num_agents):
                 self.scan_rngs[idx] = np.random.default_rng(base_seed + idx)
@@ -245,6 +264,20 @@ class F110Simulator:
 
         steer_commands = control_inputs[:, 0].astype(np.float32)
         accel_commands = control_inputs[:, 1].astype(np.float32)
+
+        # actuator command noise (added at command time, before the lag buffers)
+        if self._steer_noise_std > 0.0:
+            steer_commands = steer_commands + self.control_rng.normal(
+                0.0, self._steer_noise_std, self.num_agents
+            ).astype(np.float32)
+        if self._accl_noise_std > 0.0:
+            accel_commands = accel_commands + self.control_rng.normal(
+                0.0, self._accl_noise_std, self.num_agents
+            ).astype(np.float32)
+
+        # longitudinal (throttle) actuator delay
+        if self._throttle_buffer is not None:
+            accel_commands = self._push_throttle_delay(accel_commands)
         self.state.control_input[:, 1] = accel_commands
 
         if self.state.delay_buffer is not None:
@@ -532,6 +565,20 @@ class F110Simulator:
             buf[agent_idx, 3] = 0.0    # velocity
             buf[agent_idx, 5:] = 0.0   # yaw_rate, slip angle (no-op for KS); yaw at [4] preserved
         self.state.collisions[agent_idx] = 1.0
+
+    def _push_throttle_delay(self, values: np.ndarray) -> np.ndarray:
+        """Ring-buffer delay for the longitudinal command (mirrors the steering
+        delay in SimulationState.push_delay)."""
+        buf = self._throttle_buffer
+        head = self._throttle_head
+        n = buf.shape[1]
+        delayed = np.empty_like(values)
+        for i in range(values.shape[0]):
+            idx = head[i]
+            delayed[i] = buf[i, idx]
+            buf[i, idx] = values[i]
+            head[i] = (idx + 1) % n
+        return delayed
 
     def _compute_all_vertices(self) -> list:
         """Bounding-box corner vertices for every agent from their current poses.
