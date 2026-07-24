@@ -109,6 +109,7 @@ env.step(action)                                          f110_env.py:283-318
 | [`envs/track/`](f1tenth_gym/envs/track/track.py) | Map loading/download, splines, Frenet frame | `Track` :41 |
 | [`envs/reset/`](f1tenth_gym/envs/reset/__init__.py) | Start-pose strategies (a real registry) | `make_reset_fn` :89 |
 | [`envs/rendering/`](f1tenth_gym/envs/rendering/__init__.py) | One PyQt6 GL backend (`PyQtEnvRendererGL`) + render callbacks | `make_renderer` :19 |
+| [`envs/wrappers.py`](f1tenth_gym/envs/wrappers.py) | Thin gym.Wrapper adapters onto the multi-agent env | `SingleAgentWrapper`, `ObservationDelayWrapper` |
 
 ---
 
@@ -167,13 +168,15 @@ Units: metres, radians, m/s, m/s², rad/m (curvature). Yaw wrapped to `[-π, π)
 
 **Every scalar is a 0-d float32 ndarray, not a Python float** — built by `np.asarray(..., dtype=np.float32)` in `observe()` ([full.py:128-131](f1tenth_gym/envs/observation/full.py#L128) base, [:143-151](f1tenth_gym/envs/observation/full.py#L143) derived); the matching `shape=()` *spaces* come from `_scalar_box` ([full.py:38-39](f1tenth_gym/envs/observation/full.py#L38)). This is load-bearing: it keeps the numba `np.dot` in `examples/waypoint_follow.py` type-consistent.
 
+**Observation-space bounds are physical and finite** (were a blanket `±1e30`, which fails `check_env` normalisation and any bounded-space RL). `_physical_bounds()` ([full.py](f1tenth_gym/envs/observation/full.py)) derives them from the vehicle params and track: velocity from `v_min/v_max`, steering from `s_min/s_max`, pose from the centerline bbox + 5 m margin, angles ±π, yaw-rate `1.5·v_max·tan(s_max)/wheelbase`, frenet `s` from the frame length. So `env.observation_space` is a finite `Box` — compose `FlattenObservation` for a normalisable flat space.
+
 > **Trap 1:** `DIRECT` does **not** contain `pose_x` — it is a *derived* field. `obs["agent_0"]["pose_x"]` under the default config raises `KeyError`. Use `KINEMATIC_STATE` or read `std_state`.
 >
 > **Trap 2:** `DIRECT` is **conditional**. With `compute_frenet_frame=False`, `_selected_fields` drops `frenet_pose` → `obs[...]["frenet_pose"]` raises `KeyError`; requesting it explicitly via `FEATURES` raises `ValueError: frenet_pose requested but environment does not compute the Frenet frame` ([full.py:85-92](f1tenth_gym/envs/observation/full.py#L85)). With `lidar_config.enabled=False`, `scan` has shape `(0,)`, not `(num_beams,)` ([full.py:118-122](f1tenth_gym/envs/observation/full.py#L118)).
 
 **Reset strategies** ([reset/__init__.py:32](f1tenth_gym/envs/reset/__init__.py#L32)): `RL_GRID_STATIC`(default) / `RL_RANDOM_STATIC` / `RL_GRID_RANDOM` / `RL_RANDOM_RANDOM` / `MAP_RANDOM_STATIC`. All RL_* bind to `track.raceline` ([:57](f1tenth_gym/envs/reset/__init__.py#L57)), **never** the centerline, and all pass `move_laterally=False` — so multi-agent "grid" resets put every car **on** the raceline, separated only longitudinally.
 
-**Config** — 15 top-level `EnvConfig` fields ([env_config.py:134](f1tenth_gym/envs/env_config.py#L134)). Defaults: `seed=12345, map_name="Spielberg", map_scale=1.0, params=F1TENTH, num_agents=1, ego_index=0, collision_check=LIDAR_SCAN, render_enabled=True`, plus `ControlConfig(SPEED, STEERING_ANGLE, steer_delay_steps=0)`, `SimulationConfig(timestep=0.01, integrator_timestep=0.01, RK4, ST, FRENET_BASED, compute_frenet_frame=True, max_laps=1)`, `ObservationConfig(DIRECT, None)`, `ResetConfig(RL_GRID_STATIC)`, `LiDARConfig(1080 beams, fov=4.712389, range 0–30, noise_std=0.01, tf=(0.275,0,0))`, `RenderConfig(render_fps=60, real_time_factor=1.0)`, `TerminationConfig(max_episode_steps=None, terminate_on_collision=True, collision_agents="ego")`.
+**Config** — 17 top-level `EnvConfig` fields ([env_config.py:134](f1tenth_gym/envs/env_config.py#L134)). Defaults: `seed=12345, map_name="Spielberg", map_scale=1.0, params=F1TENTH, num_agents=1, ego_index=0, collision_check=LIDAR_SCAN, render_enabled=True`, plus `ControlConfig(SPEED, STEERING_ANGLE, steer_delay_steps=0, throttle_delay_steps=0, steer_noise_std=0.0, accl_noise_std=0.0)`, `SimulationConfig(timestep=0.01, integrator_timestep=0.01, RK4, ST, FRENET_BASED, compute_frenet_frame=True, max_laps=1)`, `ObservationConfig(DIRECT, None)`, `ResetConfig(RL_GRID_STATIC)`, `LiDARConfig(1080 beams, fov=4.712389, range 0–30, noise_std=0.01, dropout_prob=0.0, range_bias_std=0.0, tf=(0.275,0,0))`, `RenderConfig(render_fps=60, real_time_factor=1.0)`, `TerminationConfig(max_episode_steps=None, terminate_on_collision=True, collision_agents="ego")`, `RewardConfig(SURVIVAL)`, `DomainRandomizationConfig(enabled=False)`. The last two and the new `ControlConfig`/`LiDARConfig` sim2real knobs are documented in *RL & sim2real interfaces* below.
 
 Nested mutation must nest: `cfg.with_updates(params=cfg.params.with_updates(mu=1.0))`, then `env.unwrapped.configure(cfg2)`.
 
@@ -235,9 +238,29 @@ Fully decoupled: `F110Env` hands the renderer an immutable `render_obs` deepcopy
 
 ---
 
+## RL & sim2real interfaces
+
+Scope boundary: **the gym stays simulation-only with clean interfaces.** No planners (those live in `f1tenth_planning`), no RL training loops (a separate `f1tenth_learning` repo). What lives here is the reward/observation surface and the sim2real knobs an RL user needs, plus thin adapters.
+
+**`RewardConfig`** ([env_config.py](f1tenth_gym/envs/env_config.py)) — pluggable reward, replacing the hardcoded `reward = timestep`. `mode ∈ RewardMode{SURVIVAL=0 (time-alive, the historical default), PROGRESS=1, CUSTOM=2}` + weights `progress_weight/velocity_weight/timestep_weight/collision_penalty` + a `reward_fn` hook (required for CUSTOM). Computed in `F110Env._compute_reward()` from an info dict that always carries `"progress"` and `"collisions"`. **PROGRESS** uses `_compute_progress()`: a per-agent, wrap-corrected frenet Δs seeded from the spawn `s` at reset — **independent of the lap counter** (so it works with `max_laps=None` and every `LoopCounterMode`). `EnvConfig.__post_init__` cross-validates PROGRESS ⇒ `compute_frenet_frame=True`.
+
+**`DomainRandomizationConfig`** ([env_config.py](f1tenth_gym/envs/env_config.py)) — per-episode vehicle-param randomization. `enabled=False`, `param_ranges: dict[str, (low, high)]` in **absolute units** (e.g. `{"m": (3.0, 4.0), "mu": (0.9, 1.1)}`). Validated against `fields(VehicleParameters)` (rejects unknown names, `low>high`). `F110Env._sample_vehicle_params()` draws from `np_random` (⇒ reproducible with `reset(seed=...)`) and applies via `sim.update_params` **before** `sim.reset`. Ground truth is `sim.params_array` (the flat float32 the njit kernels index) — that is what changes.
+
+**Actuation realism** (`ControlConfig`, applied in `sim.step`) — `steer_noise_std`/`accl_noise_std` add Gaussian noise to the commanded steer/longitudinal input each step (from `sim.control_rng`, reseeded off the reset seed at `base_seed + 2²⁰` so it never collides with the per-agent scan seeds `base_seed+idx`); `throttle_delay_steps` is a ring-buffer lag on the longitudinal command, mirroring the existing steering `delay_buffer` (`_push_throttle_delay`). Noise is applied **before** the lag buffers. All default 0 ⇒ byte-identical to before.
+
+**Richer LiDAR noise** (`LiDARConfig`, [lidar/config.py](f1tenth_gym/envs/lidar/config.py)) — beyond `noise_std`: `dropout_prob` (per-beam, per-step no-return clamped to `range_max`) and `range_bias_std` (a per-beam systematic bias drawn **once per episode**, reproducible, constant across a rollout — models calibration error). Both affect the **observed** scan only; collision detection still uses the clean scan (`self.scan_bias` is redrawn at reset when `range_bias_std>0`).
+
+**Wrappers** ([envs/wrappers.py](f1tenth_gym/envs/wrappers.py)) — thin adapters, both `RecordConstructorArgs` so they pickle:
+- `SingleAgentWrapper` (requires `num_agents==1`): unwraps `obs["agent_0"]`, reshapes action `(1,2)→(2,)`. Compose with `gymnasium.wrappers.FlattenObservation` for a flat finite `Box` that passes `check_env`.
+- `ObservationDelayWrapper(env, delay_steps=k)`: returns the obs from `k` steps ago (sensor/perception lag) while reward/termination/info stay current; pads with the reset obs until history exists; deep-copies frames (no aliasing). Generic over the nested-dict obs and a flattened `Box`; `k=0` is a passthrough.
+
+**Example** — [`examples/telemetry_plot.py`](examples/telemetry_plot.py): standalone pyqtgraph dashboard live-plotting speed/steering/yaw-rate/slip while a plain-numpy pure-pursuit follower drives. **Not** wired into the gym renderer — a lift-into-your-own-code pattern. Plot refreshes at `--fps`; dynamics advance by `--rtf` (multiple physics steps per frame). `pyqtgraph` is already a core dep.
+
+---
+
 ## Testing & dev workflow
 
-13 test modules, 133 test functions, all plain `unittest.TestCase`. **No `conftest.py`, no fixtures anywhere.** `pytest` config is [pyproject.toml:50-56](pyproject.toml#L50) (`addopts="-ra"`, `testpaths=["tests","integration"]`).
+24 test modules, ~200 test functions, all plain `unittest.TestCase`. **No `conftest.py`, no fixtures anywhere.** `pytest` config is [pyproject.toml:50-56](pyproject.toml#L50) (`addopts="-ra"`, `testpaths=["tests","integration"]`). One pre-existing failure is unrelated to this work: deselect `tests/test_track.py::TestTrack::test_map_dir_structure` (stale map-cache assertion). Full green run: **200 passed, 1 deselected**.
 
 | File | Pins |
 |---|---|
