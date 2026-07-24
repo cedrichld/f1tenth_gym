@@ -44,10 +44,10 @@ class LoopCounterMode(IntEnum):
 class RewardMode(IntEnum):
     """How the per-step scalar reward is computed (see ``RewardConfig``).
 
-    SURVIVAL: reward = timestep (time-alive; the historical default).
-    PROGRESS: weighted sum of forward Frenet arclength progress, speed, a
-        survival bonus, and a collision penalty. Needs the Frenet frame.
-    CUSTOM: reward = reward_fn(obs, action, info, terminated, truncated).
+    - ``SURVIVAL``: reward = timestep (time-alive; the historical default).
+    - ``PROGRESS``: weighted sum of forward Frenet arclength progress, speed, a
+      survival bonus, and a collision penalty. Needs the Frenet frame.
+    - ``CUSTOM``: reward = reward_fn(obs, action, info, terminated, truncated).
     """
 
     SURVIVAL = 0

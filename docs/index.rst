@@ -2,93 +2,102 @@
   :width: 60
   :align: left
 
-F1TENTH Gym Documentation 
-================================================
+F1TENTH Gym Documentation
+=========================
 
-Overview
----------
-The F1TENTH Gym environment is created for research that needs a asynchronous, realistic vehicle simulation with multiple vehicle instances in the same environment, with applications in reinforcement learning.
+``f1tenth_gym`` is a multi-agent, deterministic 1/10th-scale autonomous-racing
+simulator that implements the `Gymnasium <https://gymnasium.farama.org/>`_
+``Env`` API. It provides realistic single-track / kinematic vehicle dynamics,
+a ray-cast 2D LiDAR, agent-and-wall collision detection, a Frenet-frame track
+representation, and an OpenGL renderer — everything needed to develop and
+evaluate planning and reinforcement-learning controllers.
 
-The environment is designed with determinism in mind. All agents' physics simulation are stepped simultaneously, and all randomness are seeded and experiments can be reproduced. The explicit stepping also enables the physics engine to take advantage of faster than real-time execution (up to 30x realtime) and enable massively parallel applications.
+.. note::
 
-Github repo: https://github.com/f1tenth/f1tenth_gym
+   This documentation covers the ``dev-humble`` line of ``f1tenth_gym``, which
+   is configured entirely through a typed, frozen
+   :class:`~f1tenth_gym.envs.env_config.EnvConfig` dataclass. It has **diverged
+   substantially** from the older ``f110_gym`` package (dict-config,
+   ``gym.make("f110_gym:f110-v0")``, 4-tuple ``step``); older tutorials will not
+   work here. Start with :doc:`quickstart`.
 
-Note that the GitHub will have more up to date documentation than this page. If you see a mistake, please contribute a fix!
+Highlights
+----------
 
-Example Usecases
-------------------
+- **Gymnasium-native** — ``reset() -> (obs, info)`` and
+  ``step() -> (obs, reward, terminated, truncated, info)``.
+- **Typed configuration** — one frozen
+  :class:`~f1tenth_gym.envs.env_config.EnvConfig` tree; no YAML, no dicts. See
+  :doc:`configuration`.
+- **Multi-agent** — every agent is a row in struct-of-arrays physics buffers,
+  stepped together and deterministically seedable.
+- **Faster than real time** — steady-state stepping runs ~40–55× real time.
+- **RL & sim2real ready** — pluggable rewards, domain randomization, actuator
+  and sensor noise, and thin single-agent / observation-delay wrappers. See
+  :doc:`rewards_and_rl`.
 
-1. The gym environment is used as the backend for the F1TENTH virtual racing online competition at IROS 2020:
+Quick example
+-------------
 
-.. raw:: html
+.. code-block:: python
 
-  <iframe width="560" height="315" src="https://www.youtube.com/embed/VzrbRwhDw_c" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+   import gymnasium as gym
+   import numpy as np
+   from f1tenth_gym.envs.env_config import EnvConfig, SimulationConfig
 
-
-2. The gym environment is used as the simulation engine for the FormulaZero project: https://github.com/travelbureau/f0_icml_code
-
-.. raw:: html
-
-    <iframe width="560" height="315" src="https://www.youtube.com/embed/7Yat9FZzE4g" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
-
-3. The gym environment is used as the simulation engine for the TunerCar project: http://www.lewissoft.com/pdf/ICRA2020/1667.pdf
-
-.. raw:: html
-
-  <iframe width="560" height="315" src="https://www.youtube.com/embed/ay7L4VAfa_w" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+   env = gym.make(
+       "f1tenth_gym:f1tenth-v0",
+       config=EnvConfig(simulation_config=SimulationConfig(max_laps=None)),
+   )
+   obs, info = env.reset(seed=0)
+   for _ in range(100):
+       action = np.array([[0.0, 2.0]], dtype=np.float32)   # [[steer_rad, speed_mps]]
+       obs, reward, terminated, truncated, info = env.step(action)
+       if terminated or truncated:
+           break
+   env.close()
 
 Citing
---------
-If you find this Gym environment useful, please consider citing:
+------
 
-.. code::
-  
-  @inproceedings{o2020textscf1tenth,
-    title={textscF1TENTH: An Open-source Evaluation Environment for Continuous Control and Reinforcement Learning},
-    author={O’Kelly, Matthew and Zheng, Hongrui and Karthik, Dhruv and Mangharam, Rahul},
-    booktitle={NeurIPS 2019 Competition and Demonstration Track},
-    pages={77--89},
-    year={2020},
-    organization={PMLR}
-  }
+If you use this environment, please cite:
 
-Physical Platform
--------------------
+.. code-block:: bibtex
 
-To build a physical 1/10th scale vehicle, following the guide here: https://f1tenth.org/build.html
+   @inproceedings{okelly2020f1tenth,
+     title={{F1TENTH}: An Open-source Evaluation Environment for Continuous Control and Reinforcement Learning},
+     author={O'Kelly, Matthew and Zheng, Hongrui and Karthik, Dhruv and Mangharam, Rahul},
+     booktitle={NeurIPS 2019 Competition and Demonstration Track},
+     pages={77--89},
+     year={2020},
+     organization={PMLR}
+   }
 
-.. image:: assets/f110cover.png
-  :width: 400
-  :align: center
+To build a physical 1/10th-scale car, follow the guide at https://f1tenth.org/build.html.
 
 .. toctree::
-  :caption: INSTALLATION
-  :maxdepth: 2
+   :caption: Getting started
+   :maxdepth: 2
 
-  installation
-
-
-.. toctree::
-  :caption: USAGE
-  :maxdepth: 2
-
-  basic_usage
-  customized_usage
+   installation
+   quickstart
 
 .. toctree::
-  :caption: REPRODUCIBILITY
-  :maxdepth: 2
+   :caption: User guide
+   :maxdepth: 2
 
-  reproduce
+   configuration
+   observations
+   actions
+   dynamics
+   tracks
+   rendering
+   rewards_and_rl
+   reproducibility
+   examples
 
 .. toctree::
-  :caption: API REFERENCE
-  :maxdepth: 2
+   :caption: Reference
+   :maxdepth: 2
 
-  api/base_classes
-  api/dynamic_models
-  api/laser_models
-  api/collision_models
-  api/env
-  api/obv
-  api/rendering
+   api/index
