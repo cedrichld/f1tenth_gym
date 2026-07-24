@@ -41,6 +41,20 @@ class LoopCounterMode(IntEnum):
     WINDING_ANGLE = 3
 
 
+class RewardMode(IntEnum):
+    """How the per-step scalar reward is computed (see ``RewardConfig``).
+
+    SURVIVAL: reward = timestep (time-alive; the historical default).
+    PROGRESS: weighted sum of forward Frenet arclength progress, speed, a
+        survival bonus, and a collision penalty. Needs the Frenet frame.
+    CUSTOM: reward = reward_fn(obs, action, info, terminated, truncated).
+    """
+
+    SURVIVAL = 0
+    PROGRESS = 1
+    CUSTOM = 2
+
+
 @dataclass(frozen=True)
 class ControlConfig:
     """Configuration for vehicle control inputs.
@@ -272,6 +286,45 @@ class TerminationConfig:
 
 
 @dataclass(frozen=True)
+class RewardConfig:
+    """Configuration for the per-step scalar reward.
+
+    Whatever the mode, ``info`` always carries the raw signals (``progress`` =
+    per-agent forward Frenet arclength this step, ``collisions`` = per-agent
+    flags) so external code (e.g. f1tenth_learning) can compute any reward.
+
+    Attributes:
+        mode: RewardMode (SURVIVAL / PROGRESS / CUSTOM). Default SURVIVAL keeps
+            the historical ``reward = timestep``.
+        progress_weight: reward per metre of forward arclength (PROGRESS mode).
+        velocity_weight: reward per m/s of ego speed (PROGRESS mode).
+        timestep_weight: survival bonus per step, scaled by timestep (PROGRESS).
+        collision_penalty: subtracted on a step where the ego is colliding
+            (PROGRESS mode); must be >= 0.
+        reward_fn: for CUSTOM mode, a callable
+            ``(obs, action, info, terminated, truncated) -> float``.
+    """
+
+    mode: RewardMode = RewardMode.SURVIVAL
+    progress_weight: float = 1.0
+    velocity_weight: float = 0.0
+    timestep_weight: float = 0.0
+    collision_penalty: float = 0.0
+    reward_fn: Optional[Callable] = None
+
+    def __post_init__(self) -> None:
+        if self.collision_penalty < 0:
+            raise ValueError(f"collision_penalty must be >= 0, got {self.collision_penalty}")
+        if self.mode is RewardMode.CUSTOM and self.reward_fn is None:
+            raise ValueError("RewardMode.CUSTOM requires reward_fn to be set")
+        if self.reward_fn is not None and not callable(self.reward_fn):
+            raise TypeError("reward_fn must be callable")
+
+    def with_updates(self, **changes: Any) -> "RewardConfig":
+        return replace(self, **changes)
+
+
+@dataclass(frozen=True)
 class EnvConfig:
     """Main configuration for the F1TENTH environment.
 
@@ -289,6 +342,7 @@ class EnvConfig:
         lidar_config: LiDAR sensor configuration.
         render_config: Rendering pacing / frame-output configuration.
         termination_config: Episode termination / truncation configuration.
+        reward_config: Per-step reward configuration.
         collision_check: Collision detection mode.
         render_enabled: Whether rendering is enabled.
     """
@@ -306,6 +360,7 @@ class EnvConfig:
     lidar_config: LiDARConfig = field(default_factory=LiDARConfig)
     render_config: RenderConfig = field(default_factory=RenderConfig)
     termination_config: TerminationConfig = field(default_factory=TerminationConfig)
+    reward_config: RewardConfig = field(default_factory=RewardConfig)
     collision_check: CollisionCheckMode = CollisionCheckMode.LIDAR_SCAN
     render_enabled: bool = True
 
@@ -357,6 +412,15 @@ class EnvConfig:
         if not isinstance(termination_cfg, TerminationConfig):
             raise TypeError("termination must be a TerminationConfig instance")
 
+        reward_cfg = self.reward_config
+        if not isinstance(reward_cfg, RewardConfig):
+            raise TypeError("reward must be a RewardConfig instance")
+        if reward_cfg.mode is RewardMode.PROGRESS and not simulation_cfg.compute_frenet_frame:
+            raise ValueError(
+                "RewardMode.PROGRESS needs the Frenet frame; set "
+                "simulation_config.compute_frenet_frame=True"
+            )
+
         if (
             simulation_cfg.loop_counter is LoopCounterMode.FRENET_BASED
             and not simulation_cfg.compute_frenet_frame
@@ -370,6 +434,7 @@ class EnvConfig:
         object.__setattr__(self, "lidar_config", lidar_cfg)
         object.__setattr__(self, "render_config", render_cfg)
         object.__setattr__(self, "termination_config", termination_cfg)
+        object.__setattr__(self, "reward_config", reward_cfg)
 
     def with_updates(self, **changes: Any) -> "EnvConfig":
         return replace(self, **changes)

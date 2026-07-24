@@ -15,6 +15,7 @@ from .simulator import F110Simulator
 from .env_config import (
     EnvConfig,
     LoopCounterMode,
+    RewardMode,
 )
 from .integrators import integrator_from_type
 from .action import (
@@ -185,6 +186,7 @@ class F110Env(gym.Env):
         self.lidar_cfg = cfg.lidar_config
         self.render_cfg = cfg.render_config
         self.termination_cfg = cfg.termination_config
+        self.reward_cfg = cfg.reward_config
 
         self.max_episode_steps = self.termination_cfg.max_episode_steps
         self.terminate_on_collision = self.termination_cfg.terminate_on_collision
@@ -249,6 +251,9 @@ class F110Env(gym.Env):
         self.lap_times = np.zeros((self.num_agents,))
         self.lap_times_finish = np.zeros((self.num_agents,))
         self.lap_counts = np.zeros((self.num_agents,))
+        # per-agent previous Frenet s for the progress reward (independent of the
+        # lap counter so it works under any LoopCounterMode)
+        self._reward_prev_s = np.zeros((self.num_agents,))
         self.sim_time = 0.0
 
         if self.loop_counter_mode is LoopCounterMode.WINDING_ANGLE and self.track is not None:
@@ -394,6 +399,41 @@ class F110Env(gym.Env):
             terminated = terminated or (self.lap_counts[self.ego_idx] >= self.max_laps)
         return terminated
 
+    def _compute_progress(self) -> np.ndarray:
+        """Per-agent forward Frenet arclength progress (metres) since the last
+        step, wrap-corrected. Zeros when the Frenet frame is not computed."""
+        progress = np.zeros(self.num_agents)
+        if not (self.compute_frenet and self.track is not None):
+            return progress
+        s_max = self.track.centerline.spline.s_frame_max
+        for ind in range(self.num_agents):
+            s = float(self.sim.state.frenet[ind, 0])
+            ds = s - self._reward_prev_s[ind]
+            if ds < -0.5 * s_max:
+                ds += s_max
+            elif ds > 0.5 * s_max:
+                ds -= s_max
+            progress[ind] = ds
+            self._reward_prev_s[ind] = s
+        return progress
+
+    def _compute_reward(self, obs, action, progress, info, terminated, truncated) -> float:
+        cfg = self.reward_cfg
+        if cfg.mode is RewardMode.CUSTOM:
+            return float(cfg.reward_fn(obs, action, info, terminated, truncated))
+        if cfg.mode is RewardMode.SURVIVAL:
+            return self.timestep
+        # PROGRESS
+        ego = self.ego_idx
+        reward = cfg.progress_weight * float(progress[ego])
+        if cfg.velocity_weight:
+            reward += cfg.velocity_weight * float(self.sim.state.standard_state[ego, 3])
+        if cfg.timestep_weight:
+            reward += cfg.timestep_weight * self.timestep
+        if cfg.collision_penalty and self.sim.collisions[ego] > 0:
+            reward -= cfg.collision_penalty
+        return reward
+
     def step(self, action):
         """
         Step function for the gym env
@@ -419,6 +459,9 @@ class F110Env(gym.Env):
         # check done
         terminated = self._check_done()
 
+        # per-agent forward progress this step (also feeds the progress reward)
+        progress = self._compute_progress()
+
         # observation
         obs = self.observation_type.observe()
         if self.render_enabled and self.renderer is not None:
@@ -427,10 +470,7 @@ class F110Env(gym.Env):
             else:
                 self.render_obs = copy.deepcopy(self.render_obs_type.observe())
 
-        # times
-        reward = self.timestep
         self.sim_time = self.sim.state.sim_time
-
         truncated = (
             self.max_episode_steps is not None
             and self._elapsed_steps >= self.max_episode_steps
@@ -442,7 +482,10 @@ class F110Env(gym.Env):
             "lap_counts": self.lap_counts.copy(),
             "sim_time": self.sim_time,
             "collisions": self.sim.collisions.copy(),  # per-agent collision flags
+            "progress": progress,  # per-agent forward arclength this step (m)
         }
+        # reward is computed last so a CUSTOM reward_fn sees the final info
+        reward = self._compute_reward(obs, action, progress, info, terminated, truncated)
 
         return obs, reward, terminated, truncated, info
 
@@ -504,6 +547,11 @@ class F110Env(gym.Env):
         # seed rather than being byte-identical every episode.
         noise_seed = int(self.np_random.integers(0, 2**31 - 1))
         self.sim.reset(poses, option=option, noise_seed=noise_seed)
+
+        # seed the progress-reward reference from the spawn arclength so the
+        # first step's progress is ~0, not the whole spawn s
+        if self.compute_frenet and self.track is not None:
+            self._reward_prev_s[:] = self.sim.state.frenet[:, 0]
 
         if (
             self.loop_counter_mode is LoopCounterMode.FRENET_BASED
