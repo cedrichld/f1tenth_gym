@@ -173,3 +173,37 @@ class TestScanObservationCopy(unittest.TestCase):
         env.step(np.array([[0.2, 4.0]], dtype=np.float32))  # overwrites the buffer
         np.testing.assert_array_equal(scan, snapshot, "stored scan mutated after a later step")
         env.close()
+
+
+class TestFiniteObsBounds(unittest.TestCase):
+    def test_bounds_finite_and_not_violated(self):
+        """Observation spaces must be finite (not +/-1e30) and contain the
+        actual observations under aggressive driving, so gymnasium
+        normalization / check_env work."""
+        import numpy as _np
+        for ot in (ObservationType.DIRECT, ObservationType.KINEMATIC_STATE,
+                   ObservationType.DYNAMIC_STATE, ObservationType.FRENET_DYNAMIC_STATE):
+            from f1tenth_gym.envs.env_config import SimulationConfig
+            env = gym.make(
+                "f1tenth_gym:f1tenth-v0",
+                config=EnvConfig(
+                    observation_config=ObservationConfig(type=ot),
+                    simulation_config=SimulationConfig(max_laps=None),
+                    render_enabled=False,
+                ),
+            )
+            sp = env.observation_space["agent_0"]
+            for box in sp.spaces.values():
+                self.assertTrue(_np.all(_np.isfinite(box.low)), f"{ot.name}: non-finite low")
+                self.assertTrue(_np.all(_np.isfinite(box.high)), f"{ot.name}: non-finite high")
+            obs, _ = env.reset(seed=2)
+            rng = _np.random.default_rng(0)
+            for _ in range(200):
+                for k, v in obs["agent_0"].items():
+                    self.assertTrue(sp[k].contains(_np.asarray(v, _np.float32)),
+                                    f"{ot.name}: {k}={_np.asarray(v)} outside {sp[k]}")
+                a = _np.array([[rng.uniform(-0.4, 0.4), rng.uniform(0, 15)]], _np.float32)
+                obs, _, term, trunc, _ = env.step(a)
+                if term or trunc:
+                    obs, _ = env.reset()
+            env.close()

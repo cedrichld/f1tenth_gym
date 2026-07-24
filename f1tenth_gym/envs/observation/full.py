@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Callable
-
 import gymnasium as gym
 import numpy as np
 
@@ -39,31 +37,13 @@ def _scalar_box(low: float, high: float) -> gym.Space:
     return gym.spaces.Box(low=low, high=high, shape=(), dtype=np.float32)
 
 
-_FIELD_SPACE_BUILDERS: dict[str, Callable[[object, float], gym.Space]] = {
-    "scan": lambda sim, limit: scan_space(sim),
-    "std_state": lambda sim, limit: gym.spaces.Box(
-        low=-limit, high=limit, shape=(7,), dtype=np.float32
-    ),
-    "state": lambda sim, limit: gym.spaces.Box(
-        low=-limit, high=limit, shape=(sim.state_dim,), dtype=np.float32
-    ),
-    "collision": lambda sim, limit: _scalar_box(0.0, 1.0),
-    "lap_time": lambda sim, limit: _scalar_box(0.0, limit),
-    "lap_count": lambda sim, limit: _scalar_box(0.0, limit),
-    "sim_time": lambda sim, limit: _scalar_box(0.0, limit),
-    "frenet_pose": lambda sim, limit: gym.spaces.Box(
-        low=-limit, high=limit, shape=(3,), dtype=np.float32
-    ),
-    "pose_x": lambda sim, limit: _scalar_box(-limit, limit),
-    "pose_y": lambda sim, limit: _scalar_box(-limit, limit),
-    "pose_theta": lambda sim, limit: _scalar_box(-limit, limit),
-    "linear_vel_x": lambda sim, limit: _scalar_box(-limit, limit),
-    "linear_vel_y": lambda sim, limit: _scalar_box(-limit, limit),
-    "linear_vel_magnitude": lambda sim, limit: _scalar_box(0.0, limit),
-    "ang_vel_z": lambda sim, limit: _scalar_box(-limit, limit),
-    "delta": lambda sim, limit: _scalar_box(-limit, limit),
-    "beta": lambda sim, limit: _scalar_box(-limit, limit),
-}
+_PI = float(np.pi)
+# Finite fallbacks for quantities without a tight physical cap. Chosen generous
+# enough not to be violated in practice, but finite so gymnasium normalization
+# and check_env work (they can't with the old +/-1e30).
+_TIME_LIMIT = 1.0e6  # seconds / lap count
+_EY_LIMIT = 20.0     # metres of lateral Frenet deviation
+_BETA_LIMIT = _PI    # slip angle (physically < pi/2; pi is a safe cap)
 
 
 class FullObservation(Observation):
@@ -91,18 +71,91 @@ class FullObservation(Observation):
             raise ValueError("frenet_pose requested but environment does not compute the Frenet frame")
         return self._fields
 
+    def _physical_bounds(self) -> dict:
+        """Finite, roughly-physical bounds for the observation fields, derived
+        from the vehicle limits and track extents."""
+        env = self.env.unwrapped
+        p = env.vehicle_params
+        v_min, v_max = float(p.v_min), float(p.v_max)
+        s_min, s_max = float(p.s_min), float(p.s_max)
+        spd_hi = max(abs(v_min), abs(v_max))
+        wheelbase = max(float(p.lf) + float(p.lr), 0.1)
+        # kinematic max yaw rate = v*tan(steer)/wheelbase, with a safety factor
+        steer_hi = max(abs(s_min), abs(s_max))
+        yaw_rate = 1.5 * spd_hi * float(np.tan(steer_hi)) / wheelbase
+
+        track = env.track
+        cl = getattr(track, "centerline", None) if track is not None else None
+        if cl is not None:
+            xs = np.asarray(cl.xs, dtype=float)
+            ys = np.asarray(cl.ys, dtype=float)
+            m = 5.0  # metres of margin beyond the centerline extent
+            x_lo, x_hi = float(xs.min()) - m, float(xs.max()) + m
+            y_lo, y_hi = float(ys.min()) - m, float(ys.max()) + m
+            s_arc = float(cl.spline.s_frame_max)
+        else:
+            x_lo = y_lo = -1.0e4
+            x_hi = y_hi = 1.0e4
+            s_arc = _TIME_LIMIT
+        return dict(
+            v_min=v_min, v_max=v_max, spd_hi=spd_hi, s_min=s_min, s_max=s_max,
+            yaw_rate=yaw_rate, x_lo=x_lo, x_hi=x_hi, y_lo=y_lo, y_hi=y_hi, s_arc=s_arc,
+        )
+
+    def _field_space(self, field: str, sim, b: dict) -> gym.Space:
+        f32 = np.float32
+        Box = gym.spaces.Box
+        if field == "scan":
+            return scan_space(sim)
+        if field == "collision":
+            return _scalar_box(0.0, 1.0)
+        if field in ("lap_time", "lap_count", "sim_time"):
+            return _scalar_box(0.0, _TIME_LIMIT)
+        if field == "pose_x":
+            return _scalar_box(b["x_lo"], b["x_hi"])
+        if field == "pose_y":
+            return _scalar_box(b["y_lo"], b["y_hi"])
+        if field in ("pose_theta", "beta"):
+            return _scalar_box(-_PI, _PI)
+        if field == "linear_vel_x":
+            return _scalar_box(b["v_min"], b["v_max"])
+        if field == "linear_vel_y":
+            return _scalar_box(-b["spd_hi"], b["spd_hi"])
+        if field == "linear_vel_magnitude":
+            return _scalar_box(0.0, b["spd_hi"])
+        if field == "ang_vel_z":
+            return _scalar_box(-b["yaw_rate"], b["yaw_rate"])
+        if field == "delta":
+            return _scalar_box(b["s_min"], b["s_max"])
+        if field == "frenet_pose":  # [s, ey, ephi]
+            return Box(
+                low=np.array([0.0, -_EY_LIMIT, -_PI], f32),
+                high=np.array([b["s_arc"], _EY_LIMIT, _PI], f32),
+                dtype=f32,
+            )
+        if field == "std_state":  # [X, Y, steering, speed, yaw, yaw_rate, beta]
+            lo = np.array([b["x_lo"], b["y_lo"], b["s_min"], b["v_min"], -_PI, -b["yaw_rate"], -_BETA_LIMIT], f32)
+            hi = np.array([b["x_hi"], b["y_hi"], b["s_max"], b["v_max"], _PI, b["yaw_rate"], _BETA_LIMIT], f32)
+            return Box(low=lo, high=hi, dtype=f32)
+        if field == "state":  # KS: [x,y,delta,v,yaw]; ST adds [yaw_rate, beta]
+            lo = [b["x_lo"], b["y_lo"], b["s_min"], b["v_min"], -_PI, -b["yaw_rate"], -_BETA_LIMIT]
+            hi = [b["x_hi"], b["y_hi"], b["s_max"], b["v_max"], _PI, b["yaw_rate"], _BETA_LIMIT]
+            n = sim.state_dim
+            while len(lo) < n:  # pad any extra dims (e.g. MB) with a finite fallback
+                lo.append(-_TIME_LIMIT)
+                hi.append(_TIME_LIMIT)
+            return Box(low=np.array(lo[:n], f32), high=np.array(hi[:n], f32), dtype=f32)
+        raise ValueError(f"no space builder for observation field {field!r}")
+
     def space(self) -> gym.Space:
         sim = self._sim
-        limit = 1e30
+        bounds = self._physical_bounds()
         fields = self._selected_fields()
-
         agent_spaces: dict[str, gym.Space] = {}
         for agent_id in self.env.unwrapped.agent_ids:
-            feature_spaces = {
-                field: _FIELD_SPACE_BUILDERS[field](sim, limit)
-                for field in fields
-            }
-            agent_spaces[agent_id] = gym.spaces.Dict(feature_spaces)
+            agent_spaces[agent_id] = gym.spaces.Dict(
+                {field: self._field_space(field, sim, bounds) for field in fields}
+            )
         return gym.spaces.Dict(agent_spaces)
 
     def observe(self):
